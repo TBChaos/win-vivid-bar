@@ -1,0 +1,46 @@
+[BUILD] date=2026-08-07 22:53:37 hash=unknown
+[22:53:45.433] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\notepad.exe idx=0 hr=0x00000000 hIcon=0000000000740C6D
+[22:53:45.436] [icon] LOADICON[0] kind=exe/dll src=C:\Windows\System32\notepad.exe -> bytes=66457 path=
+[22:53:45.438] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\cmd.exe idx=0 hr=0x00000000 hIcon=0000000000750C6D
+[22:53:45.439] [icon] LOADICON[1] kind=exe/dll src=C:\Windows\System32\cmd.exe -> bytes=6852 path=
+[22:53:45.440] [icon] ICON SHDefExtractIcon src=C:\Windows\explorer.exe idx=0 hr=0x00000000 hIcon=0000000000760C6D
+[22:53:45.442] [icon] LOADICON[2] kind=exe/dll src=C:\Windows\explorer.exe -> bytes=23166 path=
+[22:53:45.443] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\calc.exe idx=0 hr=0x00000000 hIcon=0000000000770C6D
+[22:53:45.444] [icon] LOADICON[3] kind=exe/dll src=C:\Windows\System32\calc.exe -> bytes=1053 path=
+[22:53:45.444] [icon] LOADICONS total=4
+[22:53:45.474] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\notepad.exe idx=0 hr=0x00000000 hIcon=0000000000240C53
+[22:53:45.477] [icon] LOADICON[0] kind=exe/dll src=C:\Windows\System32\notepad.exe -> bytes=66457 path=
+[22:53:45.478] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\cmd.exe idx=0 hr=0x00000000 hIcon=0000000000250C53
+[22:53:45.479] [icon] LOADICON[1] kind=exe/dll src=C:\Windows\System32\cmd.exe -> bytes=6852 path=
+[22:53:45.480] [icon] ICON SHDefExtractIcon src=C:\Windows\explorer.exe idx=0 hr=0x00000000 hIcon=0000000000260C53
+[22:53:45.482] [icon] LOADICON[2] kind=exe/dll src=C:\Windows\explorer.exe -> bytes=23166 path=
+[22:53:45.483] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\calc.exe idx=0 hr=0x00000000 hIcon=0000000000270C53
+[22:53:45.484] [icon] LOADICON[3] kind=exe/dll src=C:\Windows\System32\calc.exe -> bytes=1053 path=
+[22:53:45.484] [icon] LOADICONS total=4
+[22:53:45.508] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\notepad.exe idx=0 hr=0x00000000 hIcon=00000000000A0D19
+[22:53:45.511] [icon] LOADICON[0] kind=exe/dll src=C:\Windows\System32\notepad.exe -> bytes=66457 path=
+[22:53:45.512] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\cmd.exe idx=0 hr=0x00000000 hIcon=00000000000B0D19
+[22:53:45.513] [icon] LOADICON[1] kind=exe/dll src=C:\Windows\System32\cmd.exe -> bytes=6852 path=
+[22:53:45.515] [icon] ICON SHDefExtractIcon src=C:\Windows\explorer.exe idx=0 hr=0x00000000 hIcon=00000000000C0D19
+[22:53:45.517] [icon] LOADICON[2] kind=exe/dll src=C:\Windows\explorer.exe -> bytes=23166 path=
+[22:53:45.518] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\calc.exe idx=0 hr=0x00000000 hIcon=00000000000D0D19
+[22:53:45.519] [icon] LOADICON[3] kind=exe/dll src=C:\Windows\System32\calc.exe -> bytes=1053 path=
+[22:53:45.519] [icon] LOADICONS total=4
+[22:53:45.542] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\notepad.exe idx=0 hr=0x00000000 hIcon=00000000016206B3
+[22:53:45.546] [icon] LOADICON[0] kind=exe/dll src=C:\Windows\System32\notepad.exe -> bytes=66457 path=
+[22:53:45.549] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\cmd.exe idx=0 hr=0x00000000 hIcon=00000000016306B3
+[22:53:45.552] [icon] LOADICON[1] kind=exe/dll src=C:\Windows\System32\cmd.exe -> bytes=6852 path=
+[22:53:45.554] [icon] ICON SHDefExtractIcon src=C:\Windows\explorer.exe idx=0 hr=0x00000000 hIcon=00000000016406B3
+[22:53:45.558] [icon] LOADICON[2] kind=exe/dll src=C:\Windows\explorer.exe -> bytes=23166 path=
+[22:53:45.560] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\calc.exe idx=0 hr=0x00000000 hIcon=00000000016506B3
+[22:53:45.561] [icon] LOADICON[3] kind=exe/dll src=C:\Windows\System32\calc.exe -> bytes=1053 path=
+[22:53:45.562] [icon] LOADICONS total=4
+[22:53:45.589] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\notepad.exe idx=0 hr=0x00000000 hIcon=0000000000370C6F
+[22:53:45.593] [icon] LOADICON[0] kind=exe/dll src=C:\Windows\System32\notepad.exe -> bytes=66457 path=
+[22:53:45.594] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\cmd.exe idx=0 hr=0x00000000 hIcon=0000000000380C6F
+[22:53:45.595] [icon] LOADICON[1] kind=exe/dll src=C:\Windows\System32\cmd.exe -> bytes=6852 path=
+[22:53:45.596] [icon] ICON SHDefExtractIcon src=C:\Windows\explorer.exe idx=0 hr=0x00000000 hIcon=0000000000390C6F
+[22:53:45.598] [icon] LOADICON[2] kind=exe/dll src=C:\Windows\explorer.exe -> bytes=23166 path=
+[22:53:45.599] [icon] ICON SHDefExtractIcon src=C:\Windows\System32\calc.exe idx=0 hr=0x00000000 hIcon=00000000003A0C6F
+[22:53:45.599] [icon] LOADICON[3] kind=exe/dll src=C:\Windows\System32\calc.exe -> bytes=1053 path=
+[22:53:45.599] [icon] LOADICONS total=4

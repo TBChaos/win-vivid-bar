@@ -1,0 +1,75 @@
+{
+  "dock": {
+    "position": "top",
+    "edgeTop": true,
+    "edgeBottom": true,
+    "edgeLeft": true,
+    "edgeRight": true,
+    "fisheyeTop": true,
+    "fisheyeBottom": true,
+    "fisheyeLeft": true,
+    "fisheyeRight": true,
+    "iconSize": 64,
+    "maxScale": 2.5,
+    "iconSpacing": 10,
+    "magnifyRadius": 4,
+    "bounceAmplitude": 30
+  },
+  "animation": {
+    "hoverStiffness": 320,
+    "hoverDamping": 22,
+    "bounceStiffness": 190,
+    "bounceDamping": 14,
+    "entryStiffness": 210,
+    "entryDamping": 16
+  },
+  "appearance": {
+    "backgroundOpacity": 0.4,
+    "backgroundBlur": false,
+    "cornerRadius": 20,
+    "shadowEnabled": true,
+    "tooltipEnabled": true,
+    "dockBarVisible": false
+  },
+  "display": { "monitor": 0 },
+  "autoHide": true,
+  "showDelay": 0,
+  "hideDelay": 0,
+  "autoStart": false,
+  "edgeOffset": 0,
+  "centerOffset": 0,
+  "zOrder": "bottom",
+  "edgeEnabled": [true, true, true, true],
+  "icons": [
+    { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+    { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+    { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+    { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+  ],
+  "edges": {
+    "bottom": [
+      { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+      { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+      { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+      { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+    ],
+    "top": [
+      { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+      { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+      { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+      { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+    ],
+    "left": [
+      { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+      { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+      { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+      { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+    ],
+    "right": [
+      { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+      { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+      { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+      { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+    ]
+  }
+}

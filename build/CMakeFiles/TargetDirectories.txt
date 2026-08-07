@@ -1,0 +1,4 @@
+D:/code/win-vivid-bar/build/CMakeFiles/openDock.dir
+D:/code/win-vivid-bar/build/CMakeFiles/copy_dock_icons.dir
+D:/code/win-vivid-bar/build/CMakeFiles/edit_cache.dir
+D:/code/win-vivid-bar/build/CMakeFiles/rebuild_cache.dir
