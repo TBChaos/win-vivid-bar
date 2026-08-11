@@ -51,7 +51,7 @@ BOOL CALLBACK FindMonitorProc(HMONITOR h, HDC, LPRECT, LPARAM lp) {
 }  // namespace
 
 HRESULT WindowManager::Create(HINSTANCE hinstance, int width, int height,
-                              WNDPROC wndProc, void* userData, bool debugAtOrigin) {
+                              WNDPROC wndProc, void* userData) {
     m_hinstance = hinstance ? hinstance : GetModuleHandleW(nullptr);
 
     WNDCLASSEXW wc = {};
@@ -71,14 +71,11 @@ HRESULT WindowManager::Create(HINSTANCE hinstance, int width, int height,
     }
     m_classRegistered = true;
 
-    // 位置：调试模式 (0,0)；正常模式工作区底部居中
-    int x = 0, y = 0;
-    if (!debugAtOrigin) {
-        RECT workArea = {};
-        SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
-        x = workArea.left + ((workArea.right - workArea.left) - width) / 2;
-        y = workArea.bottom - height;
-    }
+    // 初始位置：工作区底部居中
+    RECT workArea = {};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
+    int x = workArea.left + ((workArea.right - workArea.left) - width) / 2;
+    int y = workArea.bottom - height;
 
     m_hwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,

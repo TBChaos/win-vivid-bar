@@ -79,6 +79,8 @@ HRESULT DockManager::CreateEdgeEngine(DockPosition edge) {
     AppConfig ec = m_cfg;
     ec.dock.position = edge;
     auto eng = std::make_unique<DockEngine>();
+    // --force-gdi 须早于 Initialize：引擎在 Initialize 内把该标志下发 RenderManager。
+    eng->SetForceGdiFallback(m_forceGdi);
     HRESULT hr = eng->Initialize(ec);
     if (FAILED(hr)) return hr;
     eng->SetConfigPath(m_configPath);     // 与单 Dock 一致的持久化目标

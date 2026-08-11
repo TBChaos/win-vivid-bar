@@ -1,14 +1,12 @@
 // src/app/IconProvider.cpp
 #include "IconProvider.h"
-#include "../utils/DiagLog.h"
-#include <stdarg.h>
 #include <objbase.h>    // CreateStreamOnHGlobal / GetHGlobalFromStream（内存 PNG 编码）
 #include <shellapi.h>   // SHGetFileInfo / SHFILEINFO
 #include <shlobj.h>     // SHDefExtractIcon
 #include <shobjidl.h>   // IShellLinkW / IPersistFile（.lnk 解析）
 #include <wincodec.h>   // WIC（图标编码为 PNG）
 
-// 诊断日志已统一至 DiagLog("icon", ...)（src/utils/DiagLog.h）。
+// 注：本文件原有的诊断日志已全部移除（Release 运行期不写任何日志）。
 
 static bool FileExistsW(const std::wstring& path) {
     DWORD attr = GetFileAttributesW(path.c_str());
@@ -76,7 +74,6 @@ std::vector<IconProvider::IconImage> IconProvider::LoadIcons(const AppConfig& co
     for (size_t i = 0; i < config.icons.size(); ++i) {
         const IconEntry& entry = config.icons[i];
         IconImage resolved;
-        const char* kind = "?";
 
         // T09：.lnk 缓存键去重 —— 快捷方式的图标来自其真实目标，故缓存键用【解析后的
         // 目标路径】而非 .lnk 自身；多 .lnk 指向同一 exe / 直接放该 exe 都能复用同一份
@@ -93,14 +90,13 @@ std::vector<IconProvider::IconImage> IconProvider::LoadIcons(const AppConfig& co
         if (cached != m_resolvedCache.end()
             && (!cached->second.pngBytes.empty()
                 || (!cached->second.filePath.empty() && FileExistsW(cached->second.filePath)))) {
-            resolved = cached->second; kind = "cached";
+            resolved = cached->second;
         }
         else if (FileExistsW(entry.path) && IsImageFile(entry.path)) {
             // 直接可用的图像：用户自带资产，只读打开、不由本进程生成，无写竞争，
             // 故按路径引用（不复制字节），由 RenderManager 的 filePath 分支解码。
-            resolved.filePath = entry.path; kind = "image";
+            resolved.filePath = entry.path;
         } else if (FileExistsW(entry.path) && IsLnkFile(entry.path)) {
-            kind = "lnk";
             // .lnk 快捷方式：从（已解析的）真实目标提取图标（Step 8 添加快捷方式）
             const std::wstring& target = effectiveKey;
             if (target != entry.path && FileExistsW(target)) {
@@ -112,21 +108,15 @@ std::vector<IconProvider::IconImage> IconProvider::LoadIcons(const AppConfig& co
                     resolved = GetDefaultIconForPath(entry.path);
             }
         } else if (FileExistsW(entry.path)) {
-            kind = "exe/dll";
-            // 回归防护（BUG1 复盘）：entry.index 语义是「exe/dll 内部图标资源序号」，
-            // 默认 0 = 主图标。非 0 属罕见显式用法（请求非主资源）。
-            // 曾有种子配置把「Dock 排列下标」误填进此字段（notepad=0/cmd=1/explorer=2/
-            // calc=3），导致 explorer 取到非主图标资源、表现为「没有图标」。
-            // 此处加载时立即告警，使此类误填能被第一时间发现，而非静默取到错资源。
-            if (entry.index != 0)
-                DiagLog("icon","WARN index=%d (非主图标资源序号) for %ls —— 字段语义是 exe 内部图标资源序号，非 Dock 排列下标；若为误填请改为 0",
-                        entry.index, entry.path.c_str());
+            // 注：entry.index 语义是「exe/dll 内部图标资源序号」，默认 0 = 主图标。
+            // 非 0 属罕见显式用法（请求非主资源）。曾有种子配置把「Dock 排列下标」误填进
+            // 此字段（notepad=0/cmd=1/explorer=2/calc=3），导致 explorer 取到非主图标资源、
+            // 表现为「没有图标」。原先此处会打一条告警日志，现已随诊断日志一并移除。
             // EXE/DLL：尝试提取
             if (FAILED(ExtractIconFromExe(entry.path, entry.index, resolved))) {
                 resolved = GetDefaultIconForPath(entry.path);
             }
         } else if (IsDirectoryW(entry.path)) {
-            kind = "folder";
             // #4/#N：取「真实文件夹图标」——尊重自定义图标/叠加/缩略图（IShellItemImageFactory）。
             // 回退 SHGetFileInfo 通用文件夹图标；仍失败则系统默认文件图标（永不灰占位）。
             bool ok = false;
@@ -159,7 +149,6 @@ std::vector<IconProvider::IconImage> IconProvider::LoadIcons(const AppConfig& co
                 resolved = GetDefaultIconForPath(entry.path);
             }
         } else {
-            kind = "missing";
             resolved = GetDefaultIconForPath(entry.path);    // 错误容忍：系统默认图标（非灰）
         }
 
@@ -168,16 +157,12 @@ std::vector<IconProvider::IconImage> IconProvider::LoadIcons(const AppConfig& co
         // 缓存真实解析结果（键为 effectiveKey：.lnk 用解析目标，便于去重复用）
         if (got) m_resolvedCache[effectiveKey] = resolved;
 
-        DiagLog("icon","LOADICON[%zu] kind=%s src=%ls -> bytes=%zu path=%ls", i, kind,
-                  entry.path.c_str(), resolved.pngBytes.size(), resolved.filePath.c_str());
-
         if (got) {
             m_images.push_back(std::move(resolved));
             m_displayNames.push_back(entry.name.empty() ? L"App" : entry.name);
         }
     }
 
-    DiagLog("icon","LOADICONS total=%zu", m_images.size());
     return m_images;
 }
 
@@ -307,7 +292,6 @@ static std::vector<uint8_t> EncodeBGRAtoPng(RGBQUAD* bits, int size) {
     }
     pStream->Release();   // 同时释放 hGlobal
     pFactory->Release();
-    if (out.empty()) DiagLog("icon","ICON EncodeBGRAtoPng FAILED (empty memory stream)");
     return out;
 }
 
@@ -317,8 +301,6 @@ HRESULT IconProvider::ExtractIconFromExe(const std::wstring& exePath, int iconIn
     // 1) 优先用 SHDefExtractIcon 取目标索引图标（最权威，含多分辨率）
     HICON hIcon = nullptr;
     HRESULT hr = SHDefExtractIconW(exePath.c_str(), iconIndex, 0, &hIcon, nullptr, 256);
-    DiagLog("icon","ICON SHDefExtractIcon src=%ls idx=%d hr=0x%08X hIcon=%p",
-              exePath.c_str(), iconIndex, hr, (void*)hIcon);
     if (FAILED(hr) || !hIcon) {
         // Bug #1 根因修复：SHDefExtractIconW 在「冷缩略图缓存 / 启动早期」可能间歇性失败
         // （返回失败或空句柄）。旧代码直接回退到 SHGetFileInfoW(SHGFI_USEFILEATTRIBUTES)，
@@ -335,8 +317,6 @@ HRESULT IconProvider::ExtractIconFromExe(const std::wstring& exePath, int iconIn
                 if (hL) { if (hIcon) DestroyIcon(hIcon); hIcon = hL; hr = S_OK;
                           if (hS) DestroyIcon(hS); }
                 else if (hS) { hIcon = hS; hr = S_OK; }
-                if (SUCCEEDED(hr) && hIcon)
-                    DiagLog("icon","ICON fallbackA ExtractIconEx src=%ls", exePath.c_str());
             }
         }
         // 回退B：文件存在 → 真实文件图标（不带 USEFILEATTRIBUTES，避免白页）
@@ -346,7 +326,6 @@ HRESULT IconProvider::ExtractIconFromExe(const std::wstring& exePath, int iconIn
                                SHGFI_ICON | SHGFI_LARGEICON) && sfi.hIcon) {
                 if (hIcon) DestroyIcon(hIcon);
                 hIcon = sfi.hIcon; hr = S_OK;
-                DiagLog("icon","ICON fallbackB SHGetFileInfo(real) src=%ls", exePath.c_str());
             }
         }
         // 回退C：仅当文件确实不存在 → 才用 USEFILEATTRIBUTES（通用白页，最后兜底）
@@ -355,7 +334,6 @@ HRESULT IconProvider::ExtractIconFromExe(const std::wstring& exePath, int iconIn
             if (SHGetFileInfoW(exePath.c_str(), 0, &sfi, sizeof(sfi),
                                SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES) && sfi.hIcon) {
                 hIcon = sfi.hIcon; hr = S_OK;
-                DiagLog("icon","ICON fallbackC SHGetFileInfo(attrib) src=%ls", exePath.c_str());
             }
         }
     }
@@ -381,11 +359,8 @@ std::wstring IconProvider::GetDisplayName(size_t index) const {
 }
 
 IconProvider::IconImage IconProvider::GetDefaultIconForPath(const std::wstring& path) {
-    // 白页回退诊断：进入本函数即意味着真实图标提取/编码已失败，最终极可能落到
-    // SHGetFileInfoW("__openDock_default_file__") 的通用白页图标。真机日志里若某一边
-    // （尤其 Right）仍出现本行，说明该边仍在走白页回退，可据此立即定位。
-    DiagLog("icon","WHITE_FALLBACK src=%ls", path.c_str());
-
+    // 进入本函数即意味着真实图标提取/编码已失败，最终极可能落到
+    // SHGetFileInfoW("__openDock_default_file__") 的通用白页图标。
     IconImage resolved;
     // 文件夹：取系统真实文件夹图标（SHGetFileInfo 通用文件夹图标）
     if (IsDirectoryW(path)) {
@@ -503,7 +478,5 @@ HICON IconProvider::LoadTrayIcon(const std::wstring& pngPath, int size) {
         pDecoder->Release();
     }
     pFactory->Release();
-    if (!hIcon)
-        DiagLog("icon","LoadTrayIcon FAILED path=%ls size=%d", pngPath.c_str(), size);
     return hIcon;
 }

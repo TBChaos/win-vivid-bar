@@ -3,27 +3,11 @@
 #include "../utils/JsonUtil.h"
 #include "../utils/PathUtil.h"
 #include "../platform/AutoStart.h"
-#include "../utils/DiagLog.h"
 #include <fstream>
 #include <sstream>
 
-namespace {
-
-// 逐元素比较两个图标集（path/index/name/args/workingDir 全等才算相同）。
-// 仅用于 Load 里判断「每边独立排列是否真的不同于共享集」——相同则不打提示日志。
-bool SameIconList(const std::vector<IconEntry>& a, const std::vector<IconEntry>& b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        if (a[i].path       != b[i].path)       return false;
-        if (a[i].index      != b[i].index)      return false;
-        if (a[i].name       != b[i].name)       return false;
-        if (a[i].args       != b[i].args)       return false;
-        if (a[i].workingDir != b[i].workingDir) return false;
-    }
-    return true;
-}
-
-} // namespace
+// 注：原 SameIconList 仅服务于「每边排列与共享集不一致时打一条诊断日志」，
+// 随诊断日志一并移除。
 
 bool ConfigManager::Load(const std::string& path, AppConfig& out) {
     std::ifstream in(path, std::ios::binary);
@@ -135,25 +119,6 @@ bool ConfigManager::Load(const std::string& path, AppConfig& out) {
             const std::string arr = JsonUtil::ExtractArray(edgesJson, m.key);
             if (arr.empty()) continue;          // 该边未配置 → 保留共享默认
             out.edgeIcons[(int)m.pos] = ParseIconArray(arr, 0);
-        }
-
-        // R7 可解释性（team-lead 规范提示）：解析出的每边排列与共享集【不一致】时说明一次。
-        // D8 修复前这份数据始终未生效，用户会看到"排列突然和上次不一样了"——这条是唯一解释入口。
-        // 一致时保持静默：每次启动刷无意义日志只会淹没真正有用的信息。
-        // 走 DiagLog 而非仅 DOCK_LOG：后者在 Release 被编译期剥离，而用户困惑恰恰发生在 Release。
-        bool anyDiff = false;
-        for (int e = 0; e < 4 && !anyDiff; ++e)
-            anyDiff = !SameIconList(out.edgeIcons[e], out.sharedIcons);
-
-        if (anyDiff) {
-            const size_t nL = out.edgeIcons[(int)DockPosition::Left].size();
-            const size_t nR = out.edgeIcons[(int)DockPosition::Right].size();
-            const size_t nT = out.edgeIcons[(int)DockPosition::Top].size();
-            const size_t nB = out.edgeIcons[(int)DockPosition::Bottom].size();
-            DiagLog("config",
-                    "检测到此前保存的每边独立排列（left=%zu/right=%zu/top=%zu/bottom=%zu），已恢复。"
-                    " 此前因配置解析缺陷（D8）该数据始终未生效，本次修复后首次载入。",
-                    nL, nR, nT, nB);
         }
     }
     if (!out.icons.empty()) {

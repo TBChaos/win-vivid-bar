@@ -1,11 +1,6 @@
 // src/render/RenderManager.cpp
 #include "RenderManager.h"
-#include "../utils/DiagLog.h"
-#include <stdarg.h>
 #include <shellapi.h>   // SHGetFileInfo（系统默认文件/文件夹图标兜底）
-
-// 诊断日志（真实 GUI 下 stderr 不可见）：写入 debug_output/openDock_render.log，
-// 诊断日志已统一至 DiagLog("render", ...)（src/utils/DiagLog.h）。
 
 // ═══════════════════════════════════════════════════════════
 // 初始化
@@ -77,9 +72,6 @@ HRESULT RenderManager::CreateDeviceResources() {
 
     // 2. D2D 工厂 / 设备 / 上下文
     D2D1_FACTORY_OPTIONS fo = {};
-#ifdef DOCK_DEBUG_MODE
-    fo.debugLevel = D2D1_DEBUG_LEVEL_NONE;   // 沙盒无调试层，保持 NONE
-#endif
     DOCK_HR_CHECK(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,
                                     __uuidof(ID2D1Factory1), &fo,
                                     reinterpret_cast<void**>(m_d2dFactory.GetAddressOf())),
@@ -376,19 +368,12 @@ HRESULT RenderManager::LoadIconTextures(const std::vector<IconProvider::IconImag
     m_iconBitmaps.clear();
     m_iconBitmaps.reserve(imgs.size());
 
-    int nReal = 0, nDefault = 0;
-    for (size_t k = 0; k < imgs.size(); ++k) {
-        const auto& img = imgs[k];
+    for (const auto& img : imgs) {
         // 解码失败（极罕见：IconProvider 已保证真实系统图标）→ 用系统默认文件图标兜底，
         // 保证 m_iconBitmaps.size() 恒等于 imgs.size()，且不出现灰/失效图标。
         ComPtr<ID2D1Bitmap1> bitmap = DecodeToBitmap(img);
-        if (bitmap) {
-            ++nReal;
-        } else {
-            bitmap = CreateDefaultIconBitmap();
-            if (bitmap) { ++nDefault; DiagLog("render","TEX[%zu] decode FAIL, used system default icon", k); }
-        }
-        if (!bitmap) { DiagLog("render","TEX[%zu] ALL fallback failed (null)", k); continue; }
+        if (!bitmap) bitmap = CreateDefaultIconBitmap();
+        if (!bitmap) continue;
 
         m_iconBitmaps.push_back(bitmap);
 
@@ -397,18 +382,9 @@ HRESULT RenderManager::LoadIconTextures(const std::vector<IconProvider::IconImag
             size_t index = m_iconBitmaps.size() - 1;
             if (index < m_iconVisuals.size()) {
                 CreateIconSurface(index);
-            } else {
-                DiagLog("render","TEX[%zu] index %zu >= iconVisuals %zu (skip bake)",
-                          k, index, m_iconVisuals.size());
             }
         }
     }
-
-    int nBitmaps = (int)m_iconBitmaps.size();
-    int nVisuals = (int)m_iconVisuals.size();
-    DiagLog("render","LoadIconTextures: imgs=%zu real=%d default=%d bitmaps=%d visuals=%d%s",
-              imgs.size(), nReal, nDefault, nBitmaps, nVisuals,
-              (nBitmaps != (int)imgs.size()) ? " COUNT_MISMATCH" : "");
     return S_OK;
 }
 
@@ -445,8 +421,6 @@ HRESULT RenderManager::RebuildIconSet(const std::vector<IconProvider::IconImage>
     m_iconBitmaps.clear();
 
     if (m_mode == Mode::Windowed) {
-        DiagLog("render","RebuildIconSet Windowed: n=%d gdi=%d", n,
-                  (m_renderMode == RenderMode::GDI_Fallback) ? 1 : 0);
         // 重建图标视觉
         m_iconVisuals.resize(static_cast<size_t>(n > 0 ? n : 0));
         for (int i = 0; i < n; ++i) {
@@ -495,13 +469,10 @@ HRESULT RenderManager::RebuildIconSet(const std::vector<IconProvider::IconImage>
     // 重新解码图标位图（Windowed 同时烘焙 Surface）
     if (n > 0) {
         DOCK_HR_CHECK(LoadIconTextures(imgs), "LoadIconTextures(rebuild)");
-    } else {
     }
 
     if (m_mode == Mode::Windowed && m_dcDevice) {
-        HRESULT hrCommit = m_dcDevice->Commit();
-        DiagLog("render","RebuildIconSet Windowed END: n=%d bitmaps=%zu visuals=%zu commit=0x%08X",
-                  n, m_iconBitmaps.size(), m_iconVisuals.size(), (unsigned)hrCommit);
+        m_dcDevice->Commit();
     }
     return S_OK;
 }
@@ -515,7 +486,6 @@ HRESULT RenderManager::CreateIconSurface(size_t index) {
                       DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED,
                       &surface);
     if (FAILED(hrCreate)) {
-        DiagLog("render","CreateIconSurface[%zu] CreateSurface FAIL hr=0x%08X", index, (unsigned)hrCreate);
         return S_OK;
     }
 
@@ -523,7 +493,6 @@ HRESULT RenderManager::CreateIconSurface(size_t index) {
     POINT offset = {};
     HRESULT hrBegin = surface->BeginDraw(nullptr, IID_PPV_ARGS(&dxgiSurface), &offset);
     if (FAILED(hrBegin)) {
-        DiagLog("render","CreateIconSurface[%zu] BeginDraw FAIL hr=0x%08X", index, (unsigned)hrBegin);
         return S_OK;
     }
 
@@ -533,7 +502,6 @@ HRESULT RenderManager::CreateIconSurface(size_t index) {
     ComPtr<ID2D1Bitmap1> targetBitmap;
     HRESULT hr = m_d2dContext->CreateBitmapFromDxgiSurface(dxgiSurface.Get(), &props,
                                                            &targetBitmap);
-    HRESULT hrDraw = S_OK;
     if (SUCCEEDED(hr)) {
         m_d2dContext->SetTarget(targetBitmap.Get());
         m_d2dContext->BeginDraw();
@@ -556,26 +524,14 @@ HRESULT RenderManager::CreateIconSurface(size_t index) {
                 m_iconBitmaps[index].Get(),
                 D2D1::RectF(ox, oy, ox + m_config.baseIconSize, oy + m_config.baseIconSize),
                 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
-        } else {
-            DiagLog("render","CreateIconSurface[%zu] MISSING BITMAP (size=%zu) -> blank icon",
-                      index, m_iconBitmaps.size());
         }
         m_d2dContext->PopAxisAlignedClip();
-        hrDraw = m_d2dContext->EndDraw();
+        m_d2dContext->EndDraw();
         m_d2dContext->SetTarget(nullptr);
-    } else {
-        DiagLog("render","CreateIconSurface[%zu] CreateBitmapFromDxgiSurface FAIL hr=0x%08X",
-                  index, (unsigned)hr);
     }
-    HRESULT hrEnd = surface->EndDraw();
+    surface->EndDraw();
 
-    HRESULT hrSet = m_iconVisuals[index]->SetContent(surface.Get());
-    DiagLog("render","CreateIconSurface[%zu] create=0x%08X begin=0x%08X d2dEnd=0x%08X surfEnd=0x%08X setContent=0x%08X",
-              index, (unsigned)hrCreate, (unsigned)hrBegin, (unsigned)hrDraw,
-              (unsigned)hrEnd, (unsigned)hrSet);
-    if (FAILED(hrSet)) {
-        DiagLog("render","CreateIconSurface[%zu] SetContent FAIL hr=0x%08X", index, (unsigned)hrSet);
-    }
+    m_iconVisuals[index]->SetContent(surface.Get());
     return S_OK;
 }
 

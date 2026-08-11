@@ -30,21 +30,6 @@ public:
     // 因此：视觉用 m_hoveredIndex（粘滞），动作一律改用本函数（无状态、即时、
     // 就地按下点重算）。二者职责分离，互不污染。
     int ResolveHitIndexAt(POINT pt) const;
-    // Bug #1/#3 真实 GUI 诊断：右键删除/点击落空时把命中上下文写入日志
-    void DiagLogHitContext(POINT pt, int hoveredIndex) const;
-    // Bug #2/#3 真实 GUI 诊断：写出当前边/状态/Dock 矩形/各图标屏幕中心与 scale
-    void DiagLogLayout() const;
-    // ADR §1.7 真机诊断：把可见矩形 / 整窗 / 光标的像素级裕量（dIn/dOut/dMainL/dMainR）
-    // 写入 hitdiag，用于量化包络欠配 vs 命中链路缺陷。只写日志，不改判定。
-    void DiagLogHitGeometry(POINT pt) const;
-
-    // ═══ 沙盒/无头模拟 ═══
-    void SimulateMouseMove(int x, int y);   // 屏幕坐标
-    void SimulateClick(int x, int y);
-    void SimulateRightClick(int x, int y);
-    void SimulateReorder(int from, int to);
-    void SimulateAddFile(const std::wstring& path);
-    void SimulateDragBegin(int index);      // 无头验证钩子：进入"拖拽中且已移动"态
 
     // 右键菜单已移除（需求：去掉四个边的右键菜单）；HandleMenuCommand 现无调用方，保留接口
     void HandleMenuCommand(int cmd);                  // Step 13：Dock 菜单命令分发

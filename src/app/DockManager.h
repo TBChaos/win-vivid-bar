@@ -29,6 +29,11 @@ public:
     // 运行时按边开关（#3 多实例版）：启用即创建该边 Dock 并弹出，禁用即销毁
     void SetEdgeEnabled(DockPosition edge, bool enabled);
     void SetZOrder(int z);     // 图层位置（1=前 0=正常 -1=后），即时生效并落盘
+
+    // --force-gdi：强制各边引擎走 GDI 三级降级回退。
+    // 必须在 Initialize / InitializeFromFile 之前调用 —— 引擎在 CreateEdgeEngine 内建立，
+    // DockEngine::Initialize 会把该标志下发给 RenderManager，之后再设无效。
+    void SetForceGdiFallback(bool b) { m_forceGdi = b; }
     void MoveHomeEdge(DockPosition from, DockPosition to);  // P1-7：原子交接——旧引擎先释放再创建新引擎，杜绝同边双引擎
 
     size_t EngineCount() const;                       // 当前活跃 Dock 数
@@ -68,6 +73,7 @@ private:
     std::unique_ptr<ConfigManager> m_cfgMgr;
     std::string m_configPath;                         // 解析后的持久化目标
     bool m_initialized = false;
+    bool m_forceGdi = false;                          // --force-gdi：强制 GDI 回退
 
     // P1-7：边所有权锁，串行化边开关 / 换边，确保任意时刻同边仅一个活跃引擎。
     std::mutex m_edgeMutex;

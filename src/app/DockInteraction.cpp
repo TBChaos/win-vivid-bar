@@ -5,7 +5,6 @@
 #include "DockInteraction.h"
 #include "DockEngineInternal.h"
 #include "IconProvider.h"    // 托盘图标：运行时从 PNG 解码（LoadTrayIcon）
-#include "../utils/DiagLog.h"
 #include "../utils/PathUtil.h"
 #include <shlobj.h>
 #include <ole2.h>
@@ -140,11 +139,7 @@ void DockInteraction::HandleMouseLeave() {
     bool inOwnReveal = false;
     if (m_owner->m_window) {
         POINT cur = {};
-#ifdef DOCK_DEBUG_MODE
-        cur = m_owner->m_lastMousePos;      // 无头：用模拟光标（与 TickIdle 同源）
-#else
         if (!GetCursorPos(&cur)) cur = m_owner->m_lastMousePos;   // 取不到真实光标时退回最后已知位置
-#endif
         RECT dr = m_owner->m_window->GetDockRect();
         RECT ownReveal = m_owner->ComputeRevealZoneFor(m_owner->m_appConfig.dock.position, dr);
         inOwnReveal = m_owner->IsEdgeEnabled(m_owner->m_appConfig.dock.position)
@@ -190,7 +185,6 @@ int DockInteraction::ResolveHitIndexAt(POINT pt) const {
 void DockInteraction::HandleClick(int screenX, int screenY) {
     POINT pt = { screenX, screenY };
     m_owner->HandleMouseMove(screenX, screenY);
-    DiagLogHitGeometry(pt);
     // BUG3：这里【不能】用 m_hoveredIndex。它是粘滞的视觉态（MISS 时刻意不清零以稳住
     // tooltip），在按下点其实没命中时会残留上一帧的旧下标 —— 表现为「图标看得见、
     // 点下去却弹了另一张/启动了错的应用」。改为就地重算按下点的命中。
@@ -201,130 +195,9 @@ void DockInteraction::HandleClick(int screenX, int screenY) {
         m_owner->GetIconCurrentScreenCenter(hitIndex, cx, cy);
         // 命中即把视觉悬停态对齐到动作命中，避免 tooltip 指向另一张图标。
         m_owner->m_hoveredIndex = hitIndex;
-        // Bug #4 真实 GUI 诊断：点击命中图标时记录 [HIT] OK（屏幕中心 + 状态），
-        // 用于确认 Bottom/Right 点击是否真的选得中并能弹跳/启动。
-        DiagLog("engine","[HIT] OK edge=%s index=%d screen=(%.1f,%.1f) state=%s",
-                      PositionName(m_owner->m_appConfig.dock.position), hitIndex,
-                      cx, cy, StateName(m_owner->m_state));
         m_owner->TriggerBounce(hitIndex);
         m_owner->EnterState(DockState::Bouncing);
-    } else {
-        // Bug #1/#3 真实 GUI 诊断：点击/右键落空（未命中任何图标）时记录命中上下文，
-        // 便于无头无法目检时确认 Right/Bottom 是否真的选不中（dockRect / dockWH / 光标 /
-        // hoveredIndex / 各图标屏幕中心），交回主理人用真实 GUI 目检。
-        // 同时打印粘滞的 hovered，便于对照「视觉悬停 vs 动作命中」的分叉。
-        DiagLog("engine","[HIT] MISS edge=%s cursor=(%d,%d) hit=%d stickyHovered=%d",
-                      PositionName(m_owner->m_appConfig.dock.position), pt.x, pt.y,
-                      hitIndex, m_owner->m_hoveredIndex);
-        m_owner->DiagLogHitContext(pt, hitIndex);
     }
-}
-
-void DockInteraction::DiagLogHitGeometry(POINT pt) const {
-    // ADR §1.7 真机诊断：只写日志、不改判定。把「用户看到的图标矩形」与「窗口/命中域」
-    // 的差值直接量化到像素，用于判死残余偏差究竟来自包络欠配（dIn/dOut/dMainL/dMainR < 0）
-    // 还是命中链路（cur 落在 visScr 内却 hovered=-1）。
-    if (!m_owner->m_window || !m_owner->m_geom) return;
-    const IconGeometryParams gp{ m_owner->m_dockWidth, m_owner->m_dockHeight,
-                                 m_owner->m_appConfig.dock.baseIconSize,
-                                 m_owner->m_appConfig.dock.dockPadding };
-    const RECT fw = m_owner->m_window->GetFullWindowRect();
-    const RECT dr = m_owner->m_window->GetDockRect();
-    for (size_t i = 0; i < m_owner->m_currentLayouts.size(); ++i) {
-        const IconLayout& L = m_owner->m_currentLayouts[i];
-        const RectF v = m_owner->m_geom->iconVisualRect(L, gp);
-        DiagLog("hitdiag","edge=%s i=%zu sc=%.3f L=(%.1f,%.1f) vis=(%.1f,%.1f,%.1f,%.1f) "
-                "visScr=(%.1f,%.1f,%.1f,%.1f) fw=(%ld,%ld,%ld,%ld) cur=(%d,%d) "
-                "dIn=%.1f dOut=%.1f dMainL=%.1f dMainR=%.1f hovered=%d",
-                PositionName(m_owner->m_appConfig.dock.position), i, L.scale, L.x, L.y,
-                v.left, v.top, v.right, v.bottom,
-                v.left + dr.left, v.top + dr.top, v.right + dr.left, v.bottom + dr.top,
-                fw.left, fw.top, fw.right, fw.bottom, pt.x, pt.y,
-                (v.top + dr.top) - fw.top, fw.bottom - (v.bottom + dr.top),
-                (v.left + dr.left) - fw.left, fw.right - (v.right + dr.left),
-                m_owner->m_hoveredIndex);
-    }
-}
-
-void DockInteraction::DiagLogLayout() const {
-    // Bug #2/#3 真实 GUI 诊断：写出当前边/状态/Dock 矩形/各图标屏幕中心与 scale，
-    // 用于确认竖边（Left/Right）图标是否居中、隐藏/显示态是否可见。
-    RECT dr = m_owner->m_window ? m_owner->m_window->GetDockRect() : RECT{};
-    DiagLog("engine","[LAYOUT] edge=%s state=%s dockRect=(%d,%d,%d,%d) "
-                  "dockWH=(%.0f,%.0f) icons=%zu",
-                  PositionName(m_owner->m_appConfig.dock.position), StateName(m_owner->m_state),
-                  dr.left, dr.top, dr.right, dr.bottom,
-                  m_owner->m_dockWidth, m_owner->m_dockHeight,
-                  m_owner->m_appConfig.icons.size());
-    for (size_t i = 0; i < m_owner->m_currentLayouts.size(); ++i) {
-        float cx = 0.0f, cy = 0.0f;
-        if (m_owner->GetIconCurrentScreenCenter((int)i, cx, cy)) {
-            DiagLog("engine","  [LAYOUT] icon[%zu] scale=%.2f screen=(%.1f,%.1f)",
-                          i, m_owner->m_currentLayouts[i].scale, cx, cy);
-        }
-    }
-}
-
-void DockInteraction::DiagLogHitContext(POINT pt, int hoveredIndex) const {
-    // Bug #1/#3 真实 GUI 诊断：点击落空时把命中上下文写入 debug_output/openDock.log，
-    // 供无头无法目检时确认 Right/Bottom 是否真的选不中（详见 HandleClick 调用处说明）。
-    RECT dr = m_owner->m_window ? m_owner->m_window->GetDockRect() : RECT{};
-    int insL = 0, insT = 0, insR = 0, insB = 0;
-    m_owner->GetContentInsets(insL, insT, insR, insB);
-    DiagLog("engine","HIT_CTX edge=%s dockRect=(%d,%d,%d,%d) dockWH=(%.0f,%.0f) "
-                  "insets=(%d,%d,%d,%d) cursor=(%d,%d) hovered=%d icons=%zu",
-                  PositionName(m_owner->m_appConfig.dock.position),
-                  dr.left, dr.top, dr.right, dr.bottom,
-                  m_owner->m_dockWidth, m_owner->m_dockHeight,
-                  insL, insT, insR, insB,
-                  pt.x, pt.y, hoveredIndex, m_owner->m_appConfig.icons.size());
-    for (size_t i = 0; i < m_owner->m_appConfig.icons.size(); ++i) {
-        float cx = 0.0f, cy = 0.0f;
-        if (m_owner->GetIconCurrentScreenCenter((int)i, cx, cy)) {
-            std::wstring name = m_owner->m_iconProvider ?
-                m_owner->m_iconProvider->GetDisplayName(i) : L"";
-            DiagLog("engine","  icon[%zu] name=%ls screen=(%.1f,%.1f)",
-                          i, name.c_str(), cx, cy);
-        }
-    }
-}
-
-void DockInteraction::SimulateMouseMove(int x, int y) { m_owner->HandleMouseMove(x, y); }
-
-void DockInteraction::SimulateClick(int x, int y)     { m_owner->HandleClick(x, y); }
-
-void DockInteraction::SimulateRightClick(int x, int y) {
-    RECT dr = m_owner->m_window ? m_owner->m_window->GetDockRect() : RECT{};
-    POINT pt = { x, y };
-    // 用「静息弹簧」（scale=1, offset=0）计算确定性布局，避免复用被悬停放大/位移的
-    // 当前弹簧导致图标中心与命中矩形错位（无头集成曾因此漏判）。
-    // P0-1/2：改用零弹簧静息布局缓存（EnsureRestLayout），与原行为逐像素一致。
-    const std::vector<IconLayout>& rest = m_owner->EnsureRestLayout();
-    HitTestEngine::HitResult hit = m_owner->m_hitTest->Test(pt, dr, rest,
-        m_owner->m_appConfig.dock.position, m_owner->m_dockWidth, m_owner->m_dockHeight,
-        m_owner->m_appConfig.dock.baseIconSize, m_owner->m_appConfig.dock.dockPadding,
-        (float)DockConstants::SENSE_AREA_EXPAND_PX);
-    if (hit.hoveredIndex >= 0) m_owner->RemoveIcon(hit.hoveredIndex, false);
-}
-
-void DockInteraction::SimulateReorder(int from, int to) {
-    m_owner->ReorderIcon(from, to, false);
-}
-
-void DockInteraction::SimulateAddFile(const std::wstring& path) {
-    m_owner->AddIcon(path, L"", false);
-}
-
-// 无头验证钩子：直接进入"拖拽中且已移动"状态（供 VerifyDragLeaveDeletes 探针构造）。
-// 等价于真实 GUI 中 WM_LBUTTONDOWN 记录 m_dragIndex + WM_MOUSEMOVE 位移超阈值置
-// m_dragMoved（省去逐帧 SimulateMouseMove）。仅设置状态，不触发 RemoveIcon——删除
-// 由 TickIdle 看门狗分支在光标离开本边感应区时统一执行，从而复现目标手势。
-
-void DockInteraction::SimulateDragBegin(int index) {
-    if (index < 0 || index >= (int)m_owner->m_appConfig.icons.size()) return;
-    m_owner->m_dragIndex = index;
-    m_owner->m_dragging  = true;
-    m_owner->m_dragMoved = true;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -354,12 +227,6 @@ LRESULT DockInteraction::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_LBUTTONDOWN: {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         ClientToScreen(hwnd, &pt);
-        // 交付确认诊断：证明 WM_NCHITTEST 已把按钮按下交付到本引擎（含 Bottom/Right）。
-        // 修复 Bug #1 后，点击「bar 内侧膨胀区」也应出现此行（此前该区域 TRANSPARENT
-        // → HandleClick 永不调用 → 无 [HIT] 也无本行）。
-        DiagLog("engine","[BTNDOWN] edge=%s pt=(%d,%d) hovered=%d penetrate=%d",
-                      PositionName(m_owner->m_appConfig.dock.position), pt.x, pt.y,
-                      m_owner->m_hoveredIndex, (int)m_owner->m_mousePenetrating);
         m_owner->HandleClick(pt.x, pt.y);              // 命中图标 → 弹跳动画（视觉反馈）
         // Step 8：记录拖拽起点；真实启动延后到 WM_LBUTTONUP（未移动=点击启动，移动=重排）
         //
@@ -391,31 +258,50 @@ LRESULT DockInteraction::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         const bool dragIndexValid =
             (m_owner->m_dragIndex >= 0 && m_owner->m_dragIndex < m_owner->GetIconCount());
         if (m_owner->m_dragging) {
+            // Bugfix（用户报障 B：「点击启动后仍被误判为拖拽 → 离开感应区即删除」）：
+            // 【先收状态、再执行动作】。手势在左键抬起这一刻就已经结束，状态必须立即落地，
+            // 动作只是它的后果。旧写法把动作放在前面、状态清理放在后面，于是整个动作执行
+            // 期间 m_dragging 仍为 true 且窗口仍持有 SetCapture —— 而 LaunchIcon →
+            // ShellExecuteW 是同步阻塞且【会泵消息】的（DDE / Shell 会话）：泵出来的
+            // WM_MOUSEMOVE 会把 m_dragMoved 置真，泵出来的 WM_APP_IDLE 会走 TickIdle 的
+            // 拖拽删除分支，用户「启动完应用把鼠标挪开」就变成了「拖出感应区 → 删除图标」。
+            // 快照 + 先清理让本函数对任何重入都免疫：重入时看到的已经是干净的非拖拽态。
+            const int  actIndex = m_owner->m_dragIndex;
+            const bool actMoved = m_owner->m_dragMoved;
+            m_owner->m_dragging   = false;
+            m_owner->m_dragMoved  = false;
+            m_owner->m_dragIndex  = -1;
+            ReleaseCapture();
+
             if (!dragIndexValid) {
-                DiagLog("engine","[DRAGGUARD] edge=%s dropped: dragIndex=%d icons=%d moved=%d",
-                              PositionName(m_owner->m_appConfig.dock.position),
-                              m_owner->m_dragIndex, m_owner->GetIconCount(),
-                              (int)m_owner->m_dragMoved);
-            } else if (m_owner->m_dragMoved) {
+                // 下标失效：不删、不重排（宁可丢一次手势，也绝不误删）
+            } else if (actMoved) {
                 RECT dr = m_owner->m_window ? m_owner->m_window->GetDockRect() : RECT{};
                 RECT dropR = dr;
                 InflateRect(&dropR, 8, 8);   // 容差：拖出 Dock 条外即视为「拖拽删除」
                 if (PtInRect(&dropR, pt)) {
                     int insert = m_owner->ComputeDragInsertIndex(pt);   // 在 Dock 内释放 → 重排
-                    m_owner->ReorderIcon(m_owner->m_dragIndex, insert, true);
+                    m_owner->ReorderIcon(actIndex, insert, true);
                 } else {
-                    m_owner->RemoveIcon(m_owner->m_dragIndex, true);             // 拖出 Dock → 删除
+                    m_owner->RemoveIcon(actIndex, true);             // 拖出 Dock → 删除
                 }
             } else {
-                m_owner->LaunchIcon(m_owner->m_dragIndex);                   // 纯点击（未移动）→ 启动应用
+                m_owner->LaunchIcon(actIndex);                       // 纯点击（未移动）→ 启动应用
             }
-            m_owner->m_dragging   = false;
-            m_owner->m_dragMoved  = false;
-            m_owner->m_dragIndex  = -1;
-            ReleaseCapture();
         }
         break;
     }
+    case WM_CAPTURECHANGED:
+        // Bugfix（用户报障 B 的第二条泄漏路径）：捕获被【外部】夺走时必须撤销拖拽手势。
+        // 点击启动后被拉起的应用会 SetForegroundWindow，系统据此把鼠标捕获从本窗口收走
+        // 并投递本消息，而 WM_LBUTTONUP 可能已经不会再到达本窗口 —— 此时若放任
+        // m_dragging/m_dragMoved 留真，TickIdle 的拖拽删除分支就会在鼠标离开感应区时删图标。
+        // 语义上「没有捕获 = 没有进行中的拖拽」，故一律清空，不执行任何删除/重排/启动。
+        // 我们自己调用 ReleaseCapture() 也会同步收到本消息，但那时状态已清空，此处幂等无副作用。
+        m_owner->m_dragging  = false;
+        m_owner->m_dragMoved = false;
+        m_owner->m_dragIndex = -1;
+        break;
     // 需求：去掉四个边的右键菜单。Dock 栏不再响应右键（不弹菜单）；点击/命中逻辑不受影响。
     case WM_APP_TICK: {
         LARGE_INTEGER now;

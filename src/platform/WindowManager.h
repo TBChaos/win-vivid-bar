@@ -7,9 +7,9 @@ class WindowManager {
 public:
     ~WindowManager() { Destroy(); }
 
-    // debugAtOrigin: 调试模式下窗口放在 (0,0)（几何确定，便于模拟测试）
+    // 创建窗口：初始位置为工作区底部居中（后续由 ApplyPlacement 按边重定位）
     HRESULT Create(HINSTANCE hinstance, int width, int height,
-                   WNDPROC wndProc, void* userData, bool debugAtOrigin);
+                   WNDPROC wndProc, void* userData);
     void Destroy();
 
     void Show(bool visible);

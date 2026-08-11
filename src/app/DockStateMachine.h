@@ -16,8 +16,6 @@ public:
 
     // ═══ 自动隐藏 + 空闲鼠标穿透（Step 7）═══
     void SetAutoHideEnabled(bool on);
-    void SimulateProximityEnter();
-    void SimulateProximityLeave();
     void SetPenetration(bool penetrate);
     // P0 遮挡挂起：置/清遮挡态。on 时停动画循环并（经 UpdateIdleWatchdog）停看门狗；
     // off 时按原判据恢复看门狗。幂等（同值直接返回）。

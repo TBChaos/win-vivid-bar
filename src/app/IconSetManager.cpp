@@ -5,9 +5,7 @@
 #include "IconSetManager.h"
 #include "DockEngineInternal.h"
 #include "../core/DockGeometryLimits.h"   // INV-ENVELOPE 反解常量（ADR §1.3）
-#include "../utils/DiagLog.h"
 #include "../utils/PathUtil.h"
-#include "../debug/DebugExporter.h"
 #include <shlobj.h>
 #include <ole2.h>
 #include <commdlg.h>
@@ -37,11 +35,7 @@ bool IconSetManager::LaunchIcon(int index) {
     if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
         HINSTANCE r = ShellExecuteW(nullptr, L"open", L"explorer.exe",
                                     e.path.c_str(), nullptr, SW_SHOWNORMAL);
-        bool ok = (reinterpret_cast<INT_PTR>(r) > 32);
-        if (!ok) {
-        }
-        DiagLog("engine","LAUNCH index=%d path=%ls ok=%d", index, e.path.c_str(), ok ? 1 : 0);
-        return ok;
+        return (reinterpret_cast<INT_PTR>(r) > 32);
     }
 
     HINSTANCE r = ShellExecuteW(
@@ -51,11 +45,7 @@ bool IconSetManager::LaunchIcon(int index) {
         e.args.empty()      ? nullptr : e.args.c_str(),
         e.workingDir.empty() ? nullptr : e.workingDir.c_str(),
         SW_SHOWNORMAL);
-    bool ok = (reinterpret_cast<INT_PTR>(r) > 32);
-    if (!ok) {
-    }
-    DiagLog("engine","LAUNCH index=%d path=%ls ok=%d", index, e.path.c_str(), ok ? 1 : 0);
-    return ok;
+    return (reinterpret_cast<INT_PTR>(r) > 32);
 }
 
 int IconSetManager::GetBlurMode() const {
@@ -125,11 +115,6 @@ void IconSetManager::RebuildIcons(bool persist) {
     // 避免「新增图标点不到」在动画尚未 tick 时的观感。OnAnimationTick 每帧会再覆盖。
     // 几何/图标集已变 → EnsureRestLayout 内部重算并清脏，与原 rest 弹簧布局逐像素一致。
     m_owner->m_currentLayouts = m_owner->EnsureRestLayout();
-
-    DiagLog("engine","REBUILD icons=%d tex=%d mismatch=%d mode=%d gdi=%d",
-                  n, GetIconTextureCount(), (GetIconTextureCount() != n) ? 1 : 0,
-                  (int)m_owner->m_render->GetMode(),
-                  (int)(m_owner->m_render->GetRenderMode() == RenderManager::RenderMode::GDI_Fallback));
 }
 
 bool IconSetManager::RemoveIcon(int index, bool persist) {
@@ -174,7 +159,6 @@ bool IconSetManager::AddIcon(const std::wstring& path, const std::wstring& name,
 void IconSetManager::AddIconFromDrop(const std::wstring& path) {
     // 统一走 PathUtil::DeriveDisplayName（与 AddIcon 共用，边界语义一致）
     std::wstring name = PathUtil::DeriveDisplayName(path);
-    DiagLog("engine","DROP_ADD path=%ls name=%ls", path.c_str(), name.c_str());
     m_owner->AddIcon(path, name, true);
 }
 
@@ -612,51 +596,4 @@ int IconSetManager::ComputeDragInsertIndex(POINT pt) {
     int to = (mouseMain > rest[best].x) ? (best + 1) : best;
     if (to > n - 1) to = n - 1;
     return to;
-}
-
-// ═══════════════════════════════════════════════════════════
-// 调试导出（Step 13 验证）：写出状态/弹簧/布局快照
-// ═══════════════════════════════════════════════════════════
-
-void IconSetManager::ExportDebugState(const std::string& name) {
-    auto& exporter = DebugExporter::Instance();
-
-    exporter.WriteStatus(name, {
-        { "state", StateName(m_owner->m_state) },
-        { "hovered", std::to_string(m_owner->m_hoveredIndex) },
-        { "mouse_in_dock", m_owner->m_mouseInDock ? "true" : "false" },
-        { "icon_count", std::to_string(m_owner->m_appConfig.dock.iconCount) },
-        { "spring_count", std::to_string(m_owner->m_springs ? m_owner->m_springs->Count() : 0) },
-        { "dock_size", std::to_string((int)m_owner->m_dockWidth) + "x" +
-                        std::to_string((int)m_owner->m_dockHeight) },
-        { "window", m_owner->GetHwnd() ? "created" : "null" },
-        { "autoHide", m_owner->m_autoHide ? "true" : "false" },
-        { "penetrating", m_owner->m_mousePenetrating ? "true" : "false" },
-        { "showDelayMs", std::to_string(m_owner->m_showDelayMs) },
-        { "hideDelayMs", std::to_string(m_owner->m_hideDelayMs) },
-        { "hideCountdown", std::to_string((int)(m_owner->m_hideCountdown * 1000.0f)) },
-    });
-
-    if (m_owner->m_springs) {
-        std::vector<std::map<std::string, float>> springDump;
-        bool allSettled = true;
-        for (auto& [id, s] : m_owner->m_springs->GetAllSprings()) {
-            springDump.push_back({
-                { "id", (float)id }, { "value", s.value },
-                { "velocity", s.velocity }, { "target", s.target } });
-            if (!s.IsSettled()) allSettled = false;
-        }
-        exporter.DumpSprings(name + "_springs", springDump, 0, allSettled);
-    }
-
-    if (!m_owner->m_currentLayouts.empty()) {
-        std::vector<std::map<std::string, float>> layoutDump;
-        for (size_t i = 0; i < m_owner->m_currentLayouts.size(); ++i) {
-            const IconLayout& L = m_owner->m_currentLayouts[i];
-            layoutDump.push_back({
-                { "i", (float)i }, { "x", L.x }, { "y", L.y },
-                { "scale", L.scale }, { "opacity", L.opacity } });
-        }
-        exporter.DumpLayouts(name + "_layouts", layoutDump);
-    }
 }

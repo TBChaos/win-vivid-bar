@@ -81,7 +81,4 @@ public:
 
     // 计算拖拽释放时的插入位（原始图标索引序号）
     int  ComputeDragInsertIndex(POINT pt);
-
-    // 调试导出（Step 13 验证）：写出状态/弹簧/布局快照
-    void ExportDebugState(const std::string& name);
 };

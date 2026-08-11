@@ -4,7 +4,6 @@
 #include "DockEngine.h"
 #include "DockStateMachine.h"
 #include "DockEngineInternal.h"
-#include "../utils/DiagLog.h"
 #include "../utils/PathUtil.h"
 #include <shlobj.h>
 #include <ole2.h>
@@ -15,8 +14,6 @@ void DockStateMachine::EnterState(DockState next) {
     if (m_owner->m_state == next) return;
     m_owner->m_state = next;
     m_owner->m_stateTime = 0.0f;
-    // Bug #3 真实 GUI 诊断：进入静止/悬停态时写出一帧布局快照（最终停靠位置/可见性）。
-    if (next == DockState::Idle || next == DockState::Hovering) m_owner->DiagLogLayout();
 }
 
 void DockStateMachine::UpdateStateMachine(bool allSettled) {
@@ -153,9 +150,6 @@ void DockStateMachine::SetOccluded(bool on) {
 }
 
 void DockStateMachine::StartWatchdog() {
-#ifdef DOCK_DEBUG_MODE
-    return;   // 沙盒：由 SimulateFrame / SimulateProximity* 驱动，不创建真实定时器
-#else
     if (m_owner->m_watchdogHandle) return;
     QueryPerformanceCounter(&m_owner->m_lastIdleTime);
     // 100ms（~10fps）探测：兼顾灵敏度与 CPU 开销（点击穿透态重新捕获光标所需）
@@ -167,16 +161,13 @@ void DockStateMachine::StartWatchdog() {
             if (hwnd) PostMessageW(hwnd, WM_APP_IDLE, 0, 0);
         },
         m_owner, 0, 100, WT_EXECUTEDEFAULT);
-#endif
 }
 
 void DockStateMachine::StopWatchdog() {
-#ifndef DOCK_DEBUG_MODE
     if (m_owner->m_watchdogHandle) {
         DeleteTimerQueueTimer(nullptr, m_owner->m_watchdogHandle, INVALID_HANDLE_VALUE);
         m_owner->m_watchdogHandle = nullptr;
     }
-#endif
 }
 
 void DockStateMachine::TickIdle(float dt) {
@@ -185,8 +176,6 @@ void DockStateMachine::TickIdle(float dt) {
     // 「StopWatchdog 之前定时器线程已 PostMessageW(WM_APP_IDLE) 入队」的竞态 ——
     // DeleteTimerQueueTimer 只等回调返回，等不了已经躺在消息队列里的那一条，
     // 它会在挂起之后被 DispatchMessage 派发一次，足以在全屏游戏上方把 dock 唤出来。
-    // 同时这也是无头用例的观测点：SimulateIdleTick 绕过定时器直驱 TickIdle，
-    // 有本守卫才能断言「遮挡期内驱动看门狗也不唤出」。
     if (m_owner->m_occluded) return;
     // 推进显示/隐藏延迟倒计时
     m_owner->AdvanceAutoHide(dt);
@@ -200,11 +189,7 @@ void DockStateMachine::TickIdle(float dt) {
     if (m_owner->m_window && (m_owner->m_mousePenetrating || m_owner->m_autoHide ||
                                m_owner->AnyScaleElevated())) {
         POINT pt;
-#ifdef DOCK_DEBUG_MODE
-        pt = m_owner->m_lastMousePos;   // 无头：用模拟光标（无真实指针可探测）
-#else
         if (!GetCursorPos(&pt)) return;
-#endif
         RECT dr      = m_owner->m_window->GetDockRect();
         RECT fullWin = m_owner->m_window->GetFullWindowRect();
         bool inDock  = PtInRect(&dr, pt) != 0;
@@ -225,27 +210,32 @@ void DockStateMachine::TickIdle(float dt) {
         RECT ownReveal = m_owner->ComputeRevealZoneFor(m_owner->m_appConfig.dock.position, dr);
         bool inOwnReveal = m_owner->IsEdgeEnabled(m_owner->m_appConfig.dock.position)
                            && (PtInRect(&ownReveal, pt) != 0);
-        // Bug #2 真实 GUI 诊断：节流写出边缘感应区探测上下文（边/状态/光标/Dock 矩形/
-        // 感应区矩形/是否命中），用于确认 Left/Right 感应区是否真的能被光标进入并唤起 Dock。
-        if ((++m_owner->m_diagRevealTick % 15) == 0) {
-            DiagLog("engine","[REVEAL] edge=%s state=%s cursor=(%d,%d) "
-                          "dockRect=(%d,%d,%d,%d) reveal=(%d,%d,%d,%d) "
-                          "inDock=%d inFull=%d inReveal=%d autoHide=%d",
-                          PositionName(m_owner->m_appConfig.dock.position),
-                          StateName(m_owner->m_state),
-                          pt.x, pt.y, dr.left, dr.top, dr.right, dr.bottom,
-                          ownReveal.left, ownReveal.top, ownReveal.right, ownReveal.bottom,
-                          inDock ? 1 : 0, inFull ? 1 : 0, inOwnReveal ? 1 : 0,
-                          m_owner->m_autoHide ? 1 : 0);
-        }
         // Bugfix：拖拽删除 —— 拖拽进行中且光标已离开本边感应区，立即删除图标。
         // 复用 inOwnReveal 语义（与 autoHide reveal 一致），不另定义感应区。
         // 守卫：m_dragMoved 为真（已明显位移）才触发，纯点击不误伤；重排时光标始终
         // 在 Dock 内（∈ 感应区）→ inOwnReveal 为真 → 不触发；删除后置 m_dragging=false，
         // 后续 WM_LBUTTONUP 因 m_dragging 为假直接 no-op，杜绝双删。
         // （真实 GUI：拖出窗口后 HandleMouseMove→HandleMouseLeave 设 m_mousePenetrating=true，
-        //  看门狗持续运行 → WM_APP_IDLE → TickIdle 每帧可命中此分支；无头由 SimulateSetCursor
-        //  + SimulateIdleTick 等价驱动。）
+        //  看门狗持续运行 → WM_APP_IDLE → TickIdle 每帧可命中此分支。）
+        // Bugfix（用户报障 B：「点击启动后鼠标仍被误判为图标拖拽 → 离开感应区即删除」）：
+        // 物理主键守卫 —— m_dragging 的语义是「主键按住期间的拖拽手势进行中」，
+        // 主键一旦松开，任何残留的 m_dragging 都是脏状态，绝不允许再驱动删除路径。
+        // 脏状态的真实来源（已复核）：WM_LBUTTONUP 内 LaunchIcon → ShellExecuteW 是
+        // 同步阻塞调用，且会为 DDE / Shell 会话【泵消息】；泵消息期间窗口仍持有
+        // SetCapture、m_dragging 仍为 true，用户在应用启动过程中移动鼠标 → 嵌套派发的
+        // WM_MOUSEMOVE 把 m_dragMoved 置真 → 同样被嵌套派发的 WM_APP_IDLE 落到下面的
+        // 拖拽删除分支，图标就在「启动结束、鼠标离开感应区」的瞬间被删掉。
+        // 用 GetAsyncKeyState 取【物理】键态：GetKeyState 取的是消息队列同步态，
+        // 恰恰在 WM_LBUTTONUP 丢失/迟到的场景下不可信。左右键互换时主键为 VK_RBUTTON。
+        {
+            const int  primaryVk   = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+            const bool primaryDown = (GetAsyncKeyState(primaryVk) & 0x8000) != 0;
+            if (m_owner->m_dragging && !primaryDown) {
+                m_owner->m_dragging  = false;
+                m_owner->m_dragMoved = false;
+                m_owner->m_dragIndex = -1;
+            }
+        }
         // BUG3 删除守卫（第二条删除路径）：除 >= 0 外必须再校验上界。m_dragIndex 是在
         // WM_LBUTTONDOWN 时按下点命中的下标，拖拽期间若有其它路径增删图标（右键菜单 /
         // 拖入添加），该下标可能已越界，直接 RemoveIcon 会删错图标甚至越界。
@@ -257,16 +247,10 @@ void DockStateMachine::TickIdle(float dt) {
             (m_owner->m_dragging && m_owner->m_dragMoved && !inOwnReveal);
         if (dragGesture && !dragIndexValid) {
             // 手势成立但下标不可信 → 只收拾拖拽态，不删任何图标。
-            DiagLog("engine","[DRAGGUARD] edge=%s tickIdle dropped: dragIndex=%d icons=%d",
-                          PositionName(m_owner->m_appConfig.dock.position),
-                          m_owner->m_dragIndex, m_owner->GetIconCount());
             m_owner->m_dragging  = false;
             m_owner->m_dragMoved = false;
             m_owner->m_dragIndex = -1;
         } else if (dragGesture) {
-            DiagLog("engine","[DRAGDELETE] edge=%s index=%d cursor=(%d,%d) -> RemoveIcon",
-                          PositionName(m_owner->m_appConfig.dock.position),
-                          m_owner->m_dragIndex, pt.x, pt.y);
             m_owner->RemoveIcon(m_owner->m_dragIndex, true);
             m_owner->m_dragging   = false;
             m_owner->m_dragMoved  = false;
@@ -294,22 +278,45 @@ void DockStateMachine::TickIdle(float dt) {
             m_owner->StartAnimationLoop();
         }
 
-        if (inDock) {
-            // 直接命中 Dock 区域：恢复交互（清除穿透，转悬停）
-            m_owner->HandleMouseMove(pt.x, pt.y);
-        } else if (m_owner->m_autoHide && m_owner->m_state == DockState::Hidden) {
-            // #3（多引擎修正）：仅当光标进入【本边】感应区才唤起本 dock。
+        // Bugfix（用户报障 A：四条边一致的「显示区内唤不出、只有快速划入感应区才醒」）：
+        // 隐藏 + autoHide 时，唤出判定必须【前置】，不能被 inDock 分支吞掉。
+        // 根因链（已复核）：
+        //   1) 隐藏只是 WindowManager::Show(false) → ShowWindow(SW_HIDE)，m_baseRect 原地不动，
+        //      故 GetDockRect()（= 用户口中的「显示区」）在隐藏态依然覆盖屏幕边缘那一条；
+        //   2) ComputeRevealZoneFor 是「dockRect 沿法向朝屏内扩 dockHeight/dockWidth」，
+        //      即 revealZone ⊇ dockRect —— 显示区本就是感应区的子集；
+        //   3) 旧分支顺序下，光标只要落进 dockRect，inDock 恒为真 → 走 HandleMouseMove，
+        //      而该函数首行对 Hidden/Exiting 直接 return（DockInteraction.cpp:51）→ 什么都不做，
+        //      且 else-if 的唤出分支【永远到不了】。
+        //   结论：只有「朝屏内快速划过 dockRect、被 100ms 看门狗采样恰好抓在扩展带里」
+        //   才唤得出；把光标静置在显示区（底/顶/左/右四边同理）则永远唤不出 —— 与报障完全吻合。
+        // 修正：Hidden+autoHide 优先做唤出判定，判据取 (inOwnReveal ∪ inDock)。
+        // 并集里的 inDock 是冗余保险：正常情况下它已被 inOwnReveal 包含，但 reveal 带在
+        // work 边界处会被 clamp（见 ComputeRevealZoneFor），dock 若被 edgeOffset 推到工作区
+        // 之外就会出现 dockRect ⊄ revealZone 的退化情形，此时显示区仍须能唤出。
+        // 四角硬约束 !inCorner 保持不变（语义仍只存在于这一处）。
+        const bool hiddenAutoHide =
+            (m_owner->m_autoHide && m_owner->m_state == DockState::Hidden);
+        if (hiddenAutoHide) {
+            // #3（多引擎修正）：仅当光标进入【本边】感应区/显示区才唤起本 dock。
             // 不再跨边判定、不再 SetDockPosition —— 每条边是独立永久 dock。
-            if (inOwnReveal && !inCorner) {
-                DiagLog("engine","[REVEAL] TRIGGER edge=%s cursor=(%d,%d) -> Show()",
-                              PositionName(m_owner->m_appConfig.dock.position), pt.x, pt.y);
+            const bool inOwnZone =
+                m_owner->IsEdgeEnabled(m_owner->m_appConfig.dock.position)
+                && (inOwnReveal || inDock);
+            if (inOwnZone && !inCorner) {
+                // 与旧 inDock→HandleMouseMove 路径保持一致：隐藏态也记录光标位置，
+                // 使 Show() 后的首帧鱼眼主轴坐标不是上一次的陈旧值。
+                m_owner->m_lastMousePos = pt;
                 if (m_owner->m_showDelayMs <= 0) {
-                    if (m_owner->m_state == DockState::Hidden) m_owner->Show();
+                    m_owner->Show();
                 } else if (m_owner->m_showCountdown <= 0.0f) {
                     m_owner->m_showCountdown = m_owner->m_showDelayMs / 1000.0f;
                     m_owner->m_probeHoverPending = true;
                 }
             }
+        } else if (inDock) {
+            // 直接命中 Dock 区域：恢复交互（清除穿透，转悬停）
+            m_owner->HandleMouseMove(pt.x, pt.y);
         } else {
             // Bug #2 默认隐藏兜底：autoHide 显示后，光标停在穿透透明区
             // （HTTRANSPARENT）时收不到 WM_MOUSELEAVE；看门狗虽持续运行（m_autoHide
@@ -378,38 +385,6 @@ void DockStateMachine::SetAutoHideEnabled(bool on) {
     m_owner->m_autoHide = on;
     if (!on) m_owner->m_hideCountdown = 0.0f;   // 关闭时取消待执行的隐藏
     m_owner->UpdateIdleWatchdog();
-}
-
-void DockStateMachine::SimulateProximityEnter() {
-    // 模拟光标进入边缘感应区 / Dock 区域（无头验证用，绕过真实光标探测）
-    if (m_owner->m_state == DockState::Hidden) {
-        if (m_owner->m_showDelayMs <= 0) { if (m_owner->m_state == DockState::Hidden) m_owner->Show(); }
-        else { m_owner->m_showCountdown = m_owner->m_showDelayMs / 1000.0f;
-               m_owner->m_probeHoverPending = true; }
-        return;
-    }
-    if (m_owner->m_mousePenetrating) {
-        // 可见但穿透中 → 以 Dock 中心模拟一次进入，恢复交互
-        RECT dr = m_owner->m_window ? m_owner->m_window->GetDockRect() : RECT{};
-        int cx = dr.left + (int)(m_owner->m_dockWidth * 0.5f);
-        int cy = dr.top  + (int)(m_owner->m_dockHeight * 0.5f);
-        m_owner->HandleMouseMove(cx, cy);
-    }
-}
-
-void DockStateMachine::SimulateProximityLeave() {
-    // 模拟光标离开 Dock（无头验证用）
-    m_owner->m_mouseInDock  = false;
-    m_owner->m_hoveredIndex = -1;
-    m_owner->SetPenetration(true);
-    if (m_owner->m_autoHide && m_owner->m_state != DockState::Hidden &&
-        m_owner->m_state != DockState::Exiting && m_owner->m_hideCountdown <= 0.0f) {
-        if (m_owner->m_hideDelayMs <= 0) {
-            m_owner->Hide();   // 零延迟：离开感应区立即隐藏（需求3/4）
-        } else {
-            m_owner->m_hideCountdown = m_owner->m_hideDelayMs / 1000.0f;
-        }
-    }
 }
 
 RECT DockStateMachine::ComputeRevealZoneFor(DockPosition edge, RECT r) const {

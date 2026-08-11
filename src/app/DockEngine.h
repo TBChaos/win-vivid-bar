@@ -51,15 +51,6 @@ public:
     // ═══ 动画驱动 ═══
     void OnAnimationTick(float deltaTime);
 
-    // ═══ 沙盒模拟接口（DOCK_DEBUG_MODE 验证用）═══
-    void SimulateFrame(float dt) { OnAnimationTick(dt); }
-    void SimulateMouseMove(int x, int y);      // 屏幕坐标
-    void SimulateMouseLeave() { HandleMouseLeave(); }
-    void SimulateIdleTick(float dt) { TickIdle(dt); }  // #1 无头模拟看门狗轮询（等价 WM_APP_IDLE）
-    void SimulateSetCursor(int x, int y) { m_lastMousePos.x = x; m_lastMousePos.y = y; } // #1 仅设模拟光标（不触发 HandleMouseMove/Leave）
-    void SimulateClick(int x, int y);
-    void ExportDebugState(const std::string& name);
-
     // ═══ 查询 ═══
     DockState GetState() const { return m_state; }
     HWND GetHwnd() const { return m_window ? m_window->GetHwnd() : nullptr; }
@@ -99,9 +90,6 @@ public:
     int  GetShowDelayMs() const { return m_showDelayMs; }
     int  GetHideDelayMs() const { return m_hideDelayMs; }
     void SetAutoHideEnabled(bool on);   // 运行时切换（托盘菜单等）
-    // 沙盒/无头模拟：模拟光标进入边缘感应区 / 离开 Dock
-    void SimulateProximityEnter();
-    void SimulateProximityLeave();
 
     // ═══ 遮挡挂起（P0：被其它窗口完全遮挡时 CPU 归零）═══
     // 背景：被遮挡时唯一常驻 CPU 源是 100ms 看门狗轮询（四边 ~40 次/秒）。
@@ -115,18 +103,12 @@ public:
     // 用于区分「autoHide 自身的隐藏态」（此值恒 false，解除遮挡时绝不 Show(true)）
     // 与「非 autoHide 常显态被我们收起来释放 DComp 合成」（此值为 true，需还原）。
     bool DidOcclusionHideWindow() const { return m_occlusionHidWindow; }
-    // P1-6 无头验证钩子：底层窗口当前是否可见（由 WindowManager::Show 维护）。
-    // DOCK_DEBUG_MODE 下窗口仍是真实创建的（Create 的 debugAtOrigin 只改位置，
-    // 不跳过 CreateWindowExW），故此谓词反映的是 ShowWindow 的真实结果。
+    // 底层窗口当前是否可见（由 WindowManager::Show 维护）
     bool IsWindowVisibleForTest() const { return m_window && m_window->IsVisible(); }
-    // 「按当前判据看门狗是否应运行」。真实构建下与 StartWatchdog/StopWatchdog 的
-    // 分支条件逐字一致；DOCK_DEBUG_MODE 下真实定时器被 `#ifdef ... return;` 短路、
-    // 无句柄可断言，本谓词是无头用例唯一可观测的等价物。
+    // 「按当前判据看门狗是否应运行」，与 StartWatchdog/StopWatchdog 分支条件逐字一致
     bool IsWatchdogActive() const {
         return !m_occluded && (m_autoHide || m_mousePenetrating || AnyScaleElevated());
     }
-    // 沙盒/无头模拟：直接走 SetOccluded，不经 SetWinEventHook / 真实几何判定
-    void SimulateSetOccluded(bool on);
 
     // ═══ 右键删除 + 拖拽排序 + 拖拽添加（Step 8）═══
     int  GetIconCount() const { return (int)m_appConfig.icons.size(); }
@@ -142,11 +124,6 @@ public:
     void PersistConfigTo(const std::string& path) const; // 写入当前配置（验证用）
     // 文件拖放回调（IDropTarget）
     void AddIconFromDrop(const std::wstring& path);
-    // 沙盒/无头模拟
-    void SimulateRightClick(int x, int y);
-    void SimulateReorder(int from, int to);
-    void SimulateAddFile(const std::wstring& path);
-    void SimulateDragBegin(int index);   // 无头验证钩子：进入"拖拽中且已移动"态
 
     // ═══ 开机自启动 + 位置微调 + 图层 Z 序（Step 10）═══
     void ApplyPlacement();               // 依配置(position/offset/monitor/zOrder)定位窗口
@@ -179,8 +156,8 @@ public:
     float GetDockHeight() const { return m_dockHeight; }
     // P0-4：角格边长 = min(dockWidth, dockHeight)（相邻两带法向厚度交叠正方形，取较小带厚）
     int  ComputeCornerSize() const;
-    // Bugfix 回归辅助：只读暴露【本边】感应区矩形（内部 ComputeRevealZoneFor 为 private）。
-    // 供 --verify 的四边 reveal 用例断言「感应区确实落在对应边」，并打印真实坐标做证据。
+    // Bugfix 回归辅助：只读暴露【本边】感应区矩形（内部 ComputeRevealZoneFor 为 private），
+    // 便于断言「感应区确实落在对应边」并打印真实坐标做证据。
     RECT GetOwnRevealZoneForTest() const;
 
     // Step 14 验证辅助：取某图标静息态的屏幕中心（朝向感知，用于无头命中测试）
@@ -217,13 +194,6 @@ private:
     void HandleMouseMove(int screenX, int screenY);
     void HandleMouseLeave();
     void HandleClick(int screenX, int screenY);
-    // Bug #1/#3 真实 GUI 诊断：右键删除/点击落空时把命中上下文写入
-    // debug_output/openDock.log（边/dockRect/dockWH/光标/hoveredIndex/各图标屏幕中心），
-    // 便于无头无法目检时确认 Right/Bottom 是否真的选不中。
-    void DiagLogHitContext(POINT pt, int hoveredIndex) const;
-    // Bug #2/#3 真实 GUI 诊断：写出当前边/状态/Dock 矩形/各图标屏幕中心与 scale，
-    // 用于确认竖边（Left/Right）图标是否居中、隐藏/显示态是否可见。
-    void DiagLogLayout() const;
     void TriggerBounce(int iconIndex);
 
     // 弹簧目标设置
@@ -294,11 +264,6 @@ private:
     float m_dockHeight = 0.0f;
     // Step 12：当前生效的四边留白（px），用于验证与调试导出
     int m_insetL = 0, m_insetT = 0, m_insetR = 0, m_insetB = 0;
-
-    // 真实 GUI 诊断节流计数（避免看门狗/动画帧刷屏；~每 0.5s 落一条）
-    int m_diagRevealTick = 0;
-    int m_diagLayoutFrame = 0;
-    int m_diagHitTick = 0;   // [HIT] 诊断节流计数（WM_NCHITTEST / HitTestAt 共用）
 
     // ═══ 统一配置 C++ 模块（EdgeGeometry / EdgeConfig）═══
     std::unique_ptr<IEdgeGeometry> m_geom;        // 当前边几何（编译期模板 + 多态）

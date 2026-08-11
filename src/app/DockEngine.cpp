@@ -9,13 +9,11 @@
 #include "IconSetManager.h"       // T10 子模块：图标集 / 持久化 / 弹簧目标 / 放置
 #include "DockInteraction.h"      // T10 子模块：消息 / 鼠标 / 点击 / 菜单 / 托盘 / 诊断
 #include "DockEngineInternal.h"   // StateName / PositionName / GetMonitorWorkRect（inline free）
-#include "../debug/DebugExporter.h"
 #include <shlobj.h>   // IDropTarget / 文件拖放（Step 8）
 #include <ole2.h>     // OleInitialize / OleUninitialize（STA，拖放必需）
 #include <commdlg.h>  // GetOpenFileNameW（Step 13 添加应用对话框）
 #include <cmath>   // std::isfinite / std::clamp
 #include "../utils/PathUtil.h"
-#include "../utils/DiagLog.h"
 
 // ═══════════════════════════════════════════════════════════
 // Step 8：文件拖放目标（IDropTarget）—— 拖拽文件/快捷方式到 Dock 即添加
@@ -106,8 +104,6 @@ HRESULT DockEngine::InitializeFromFile(const std::string& configPath) {
 HRESULT DockEngine::Initialize(const AppConfig& config) {
     m_appConfig = config;
 
-    // 注：原启动横幅 printf("[BUILD] ...") 已移除（纯开发期 stdout 输出）。
-    // 构建戳信息未丢失——DiagLog 仍会把 [BUILD] date/hash 写在每份诊断日志首行。
     // #3 多实例：若由 DockManager 注入共享图标存储，使本地镜像与共享存储一致
     if (m_sharedEdgeIcons) m_appConfig.edgeIcons = *m_sharedEdgeIcons;
     if (m_sharedSharedIcons) m_appConfig.sharedIcons = *m_sharedSharedIcons;
@@ -145,20 +141,13 @@ HRESULT DockEngine::Initialize(const AppConfig& config) {
     ReconcileSprings(m_appConfig.icons, 0.0f);
     m_restDirty = true;
 
-#ifdef DOCK_DEBUG_MODE
-    const bool debugAtOrigin = true;
-#else
-    const bool debugAtOrigin = false;
-#endif
     HRESULT hr = m_window->Create(GetModuleHandleW(nullptr),
                                   (int)m_dockWidth, (int)m_dockHeight,
-                                  &DockEngine::StaticWndProc, this, debugAtOrigin);
+                                  &DockEngine::StaticWndProc, this);
     DOCK_HR_CHECK(hr, "WindowManager::Create");
 
-    if (!debugAtOrigin) {
-        m_window->ApplyZOrder(m_appConfig.zOrder);
-        ApplyPlacement();
-    }
+    m_window->ApplyZOrder(m_appConfig.zOrder);
+    ApplyPlacement();
 
     // 开机自启的落地已收敛到 DockManager::Initialize 的 AutoStart::Reconcile
     //（唯一真源，含「注册表被外部改动 → 反向同步回配置」）。这里不再重复调用，
@@ -182,11 +171,7 @@ HRESULT DockEngine::Initialize(const AppConfig& config) {
         ComputeInsets(il, it, ir, ib);
         m_render->SetContentInsets(il, it, ir, ib);   // 设定 m_offsetX/Y 与 m_winW/m_winH
     }
-#ifdef DOCK_DEBUG_MODE
-    hr = m_render->Initialize(RenderManager::Mode::Headless, nullptr, dc);
-#else
     hr = m_render->Initialize(RenderManager::Mode::Windowed, m_window->GetHwnd(), dc);
-#endif
     DOCK_HR_CHECK(hr, "RenderManager::Initialize");
 
     // Step 12：RenderManager::Initialize 之后再次同步内容留白（m_dockWidth 此刻已就绪）
@@ -213,6 +198,15 @@ HRESULT DockEngine::Initialize(const AppConfig& config) {
     m_hideCountdown = 0.0f;
     m_probeHoverPending = false;
 
+    // Bugfix（用户报障 B「启动流程被误判成图标拖拽」）：启动链路显式落定非拖拽态。
+    // 成员默认值本已如此，但这里必须是【显式后置条件】而非默认值的巧合 ——
+    // Initialize 可在同一 DockEngine 实例上被重入调用（换边 / 重建），
+    // 任何上一轮遗留的拖拽态都不允许穿越一次初始化活到新的一轮。
+    m_dragging  = false;
+    m_dragMoved = false;
+    m_dragIndex = -1;
+    m_dragStart = {};
+
     m_initialized = true;
     // #7：自动隐藏初始隐藏，启动看门狗持续探测边缘感应区
     if (m_autoHide) UpdateIdleWatchdog();
@@ -228,6 +222,14 @@ HRESULT DockEngine::Show() {
         if (!m_dropTarget) m_dropTarget = new DockDropTarget(this);
         if (m_dropTarget && GetHwnd()) RegisterDragDrop(GetHwnd(), m_dropTarget.Get());
     }
+
+    // Bugfix（用户报障 B）：弹出即清空拖拽态。Show() 只在 m_state == Hidden 时走到这里，
+    // 而隐藏态下不可能存在合法的进行中拖拽（拖拽必须始于对可见图标的按下），
+    // 因此这里的任何残留都是脏状态，必须在窗口重新可见之前清掉 ——
+    // 否则它会紧接着被 TickIdle 的「已离开本边感应区 → 删除图标」分支消费。
+    m_dragging  = false;
+    m_dragMoved = false;
+    m_dragIndex = -1;
 
     EnterState(DockState::Entering);
     m_entryReleased = 0;   // 入场级联从 0 开始，逐帧释放
@@ -337,8 +339,6 @@ void DockEngine::OnAnimationTick(float dt) {
     QueryPerformanceCounter(&pfB);
     m_perfLayoutUs += (double)(pfB.QuadPart - pfA.QuadPart) * 1e6 / (double)pfFreq.QuadPart;
     m_perfFrames++;
-    // Bug #3 真实 GUI 诊断：节流写出当前布局（每 30 帧 ~0.5s）
-    if ((++m_diagLayoutFrame % 30) == 0) DiagLogLayout();
 
     // Step 8 / #4：拖拽进行中（已发生位移）→ 被拖图标跟随光标
     if (m_dragging && m_dragMoved && m_dragIndex >= 0
@@ -368,10 +368,6 @@ void DockEngine::OnAnimationTick(float dt) {
 }
 
 void DockEngine::StartAnimationLoop() {
-#ifdef DOCK_DEBUG_MODE
-    m_isAnimating = true;   // 沙盒：由 SimulateFrame 驱动，不创建真实定时器
-    return;
-#else
     if (m_isAnimating) return;
     m_isAnimating = true;
     QueryPerformanceCounter(&m_lastTickTime);
@@ -384,18 +380,15 @@ void DockEngine::StartAnimationLoop() {
             if (hwnd) PostMessageW(hwnd, WM_APP_TICK, 0, 0);
         },
         this, 0, DockConstants::TIMER_INTERVAL_MS, WT_EXECUTEDEFAULT);
-#endif
 }
 
 void DockEngine::StopAnimationLoop() {
     if (!m_isAnimating) return;
     m_isAnimating = false;
-#ifndef DOCK_DEBUG_MODE
     if (m_timerHandle) {
         DeleteTimerQueueTimer(nullptr, m_timerHandle, INVALID_HANDLE_VALUE);
         m_timerHandle = nullptr;
     }
-#endif
 }
 
 bool DockEngine::AreSpringsFinite() const {
@@ -487,10 +480,6 @@ bool DockEngine::HitTestAt(int x, int y) {
     //    Entering 归可见（已在画），Exiting 归不可见（正在擦））
     const bool dockVisible = (m_state != DockState::Hidden) && (m_state != DockState::Exiting);
     if (!dockVisible) {
-        if ((++m_diagHitTick % 20) == 0) {
-            DiagLog("engine","[HIT] edge=%s pt=(%d,%d) ht=TRANSPARENT(invisible) state=%s",
-                    PositionName(m_appConfig.dock.position), pt.x, pt.y, StateName(m_state));
-        }
         return false;
     }
 
@@ -506,13 +495,6 @@ bool DockEngine::HitTestAt(int x, int y) {
         client = hit.isInDock || hit.hoveredIndex >= 0;
     }
 
-    if ((++m_diagHitTick % 20) == 0) {
-        DiagLog("engine","[HIT] edge=%s pt=(%d,%d) dr=(%d,%d,%d,%d) ht=%s hovered=%d state=%s vis=%d",
-                      PositionName(m_appConfig.dock.position), pt.x, pt.y,
-                      dr.left, dr.top, dr.right, dr.bottom,
-                      client ? "CLIENT" : "TRANSPARENT", m_hoveredIndex,
-                      StateName(m_state), dockVisible ? 1 : 0);
-    }
     return client;
 }
 
@@ -522,12 +504,9 @@ bool DockEngine::HitTestAt(int x, int y) {
 void DockEngine::EnterState(DockState next) { m_stateMachine->EnterState(next); }
 void DockEngine::UpdateStateMachine(bool allSettled) { m_stateMachine->UpdateStateMachine(allSettled); }
 void DockEngine::SetAutoHideEnabled(bool on) { m_stateMachine->SetAutoHideEnabled(on); }
-void DockEngine::SimulateProximityEnter() { m_stateMachine->SimulateProximityEnter(); }
-void DockEngine::SimulateProximityLeave() { m_stateMachine->SimulateProximityLeave(); }
 void DockEngine::SetPenetration(bool penetrate) { m_stateMachine->SetPenetration(penetrate); }
 // P0 遮挡挂起：与 SetAutoHideEnabled 同样的薄转发风格，实现体在状态机
 void DockEngine::SetOccluded(bool on) { m_stateMachine->SetOccluded(on); }
-void DockEngine::SimulateSetOccluded(bool on) { m_stateMachine->SetOccluded(on); }
 void DockEngine::UpdateIdleWatchdog() { m_stateMachine->UpdateIdleWatchdog(); }
 void DockEngine::StartWatchdog() { m_stateMachine->StartWatchdog(); }
 void DockEngine::StopWatchdog() { m_stateMachine->StopWatchdog(); }
@@ -559,7 +538,6 @@ void DockEngine::ApplyDockPosition(DockPosition pos) { m_stateMachine->ApplyDock
 // ═══════════════════════════════════════════════════════════
 // T10 薄转发器：图标集（IconSetManager）
 // ═══════════════════════════════════════════════════════════
-void DockEngine::ExportDebugState(const std::string& name) { m_iconSet->ExportDebugState(name); }
 std::wstring DockEngine::GetResolvedLaunchTarget(int index) const { return m_iconSet->GetResolvedLaunchTarget(index); }
 bool DockEngine::IsLaunchTargetValid(int index) const { return m_iconSet->IsLaunchTargetValid(index); }
 bool DockEngine::LaunchIcon(int index) { return m_iconSet->LaunchIcon(index); }
@@ -615,14 +593,6 @@ LRESULT DockEngine::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 void DockEngine::HandleMouseMove(int screenX, int screenY) { m_interaction->HandleMouseMove(screenX, screenY); }
 void DockEngine::HandleMouseLeave() { m_interaction->HandleMouseLeave(); }
 void DockEngine::HandleClick(int screenX, int screenY) { m_interaction->HandleClick(screenX, screenY); }
-void DockEngine::DiagLogHitContext(POINT pt, int hoveredIndex) const { m_interaction->DiagLogHitContext(pt, hoveredIndex); }
-void DockEngine::DiagLogLayout() const { m_interaction->DiagLogLayout(); }
-void DockEngine::SimulateMouseMove(int x, int y) { m_interaction->SimulateMouseMove(x, y); }
-void DockEngine::SimulateClick(int x, int y) { m_interaction->SimulateClick(x, y); }
-void DockEngine::SimulateRightClick(int x, int y) { m_interaction->SimulateRightClick(x, y); }
-void DockEngine::SimulateReorder(int from, int to) { m_interaction->SimulateReorder(from, to); }
-void DockEngine::SimulateAddFile(const std::wstring& path) { m_interaction->SimulateAddFile(path); }
-void DockEngine::SimulateDragBegin(int index) { m_interaction->SimulateDragBegin(index); }
 void DockEngine::HandleMenuCommand(int cmd) { m_interaction->HandleMenuCommand(cmd); }
 void DockEngine::AddTrayIcon() { m_interaction->AddTrayIcon(); }
 void DockEngine::RemoveTrayIcon() { m_interaction->RemoveTrayIcon(); }
