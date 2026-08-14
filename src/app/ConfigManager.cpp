@@ -269,6 +269,7 @@ bool ConfigManager::SaveConfig(const AppConfig& cfg, const std::string& path) {
     s += "  \"icons\": [\n";
     for (size_t i = 0; i < cfg.sharedIcons.size(); ++i) {
         const IconEntry& e = cfg.sharedIcons[i];
+        if (e.preview) continue;   // 拖放预览占位不落盘
         s += "    { \"path\": " + JsonUtil::JsonEscape(PathUtil::WideToUtf8(e.path));
         s += ", \"name\": " + JsonUtil::JsonEscape(PathUtil::WideToUtf8(e.name));
         s += ", \"index\": " + std::to_string(e.index);
@@ -291,6 +292,7 @@ bool ConfigManager::SaveConfig(const AppConfig& cfg, const std::string& path) {
             const auto& arr = cfg.edgeIcons[e];
             for (size_t i = 0; i < arr.size(); ++i) {
                 const IconEntry& e2 = arr[i];
+                if (e2.preview) continue;   // 拖放预览占位不落盘
                 s += "      { \"path\": " + JsonUtil::JsonEscape(PathUtil::WideToUtf8(e2.path));
                 s += ", \"name\": " + JsonUtil::JsonEscape(PathUtil::WideToUtf8(e2.name));
                 s += ", \"index\": " + std::to_string(e2.index);

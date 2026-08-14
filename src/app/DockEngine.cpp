@@ -13,6 +13,9 @@
 #include <ole2.h>     // OleInitialize / OleUninitialize（STA，拖放必需）
 #include <commdlg.h>  // GetOpenFileNameW（Step 13 添加应用对话框）
 #include <cmath>   // std::isfinite / std::clamp
+#include <cstdio>   // 调试日志 fopen_s
+#include <cstdarg>  // va_list
+#include <cstdlib>  // getenv
 #include "../utils/PathUtil.h"
 
 // ═══════════════════════════════════════════════════════════
@@ -33,33 +36,83 @@ public:
         if (r == 0) delete this;
         return (ULONG)r;
     }
-    STDMETHODIMP DragEnter(IDataObject*, DWORD, POINTL, DWORD*) override { return S_OK; }
-    STDMETHODIMP DragOver(DWORD, POINTL, DWORD*) override { return S_OK; }
-    STDMETHODIMP DragLeave() override { return S_OK; }
-    STDMETHODIMP Drop(IDataObject* pdo, DWORD, POINTL, DWORD* pe) override {
+    STDMETHODIMP DragEnter(IDataObject* pdo, DWORD, POINTL ptl, DWORD* pe) override {
+        if (pe) *pe = DROPEFFECT_COPY;
+        m_engine->DebugLog(L"[DROP] DragEnter enter pdo=%p pt=(%d,%d)\n",
+                           (void*)pdo, (int)ptl.x, (int)ptl.y);
+        // 缓存拖入路径（DragOver 不带 IDataObject，需在此读取一次）
         FORMATETC fe = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
         STGMEDIUM med = {};
+        m_dragPaths.clear();
         if (SUCCEEDED(pdo->GetData(&fe, &med)) && med.hGlobal) {
             HDROP hdrop = (HDROP)med.hGlobal;
             UINT n = DragQueryFileW(hdrop, 0xFFFFFFFF, nullptr, 0);
             for (UINT i = 0; i < n; ++i) {
                 wchar_t buf[MAX_PATH + 2] = {};
-                if (DragQueryFileW(hdrop, i, buf, MAX_PATH + 1)) {
-                    m_engine->AddIconFromDrop(std::wstring(buf));
-                }
+                if (DragQueryFileW(hdrop, i, buf, MAX_PATH + 1))
+                    m_dragPaths.push_back(std::wstring(buf));
             }
             ReleaseStgMedium(&med);
         }
+        POINT pt = { (LONG)ptl.x, (LONG)ptl.y };   // 屏幕坐标，与 ComputeDragInsertIndex 一致
+        m_engine->DebugLog(L"[DROP] DragEnter paths=%d pdo=%p pt=(%d,%d)\n",
+                           (int)m_dragPaths.size(), (void*)pdo, (int)pt.x, (int)pt.y);
+        m_engine->BeginExternalDropPreview(m_dragPaths, pt);
+        return S_OK;
+    }
+    STDMETHODIMP DragOver(DWORD, POINTL ptl, DWORD* pe) override {
+        if (pe) *pe = DROPEFFECT_COPY;
+        m_engine->DebugLog(L"[DROP] DragOver pt=(%d,%d) active=%d\n",
+                           (int)ptl.x, (int)ptl.y, (int)m_engine->ExternalDragPreviewActive());
+        POINT pt = { (LONG)ptl.x, (LONG)ptl.y };
+        m_engine->MoveExternalDropPreview(pt);   // 光标移动 → 预览占位随之让位
+        return S_OK;
+    }
+    STDMETHODIMP DragLeave() override {
+        m_engine->DebugLog(L"[DROP] DragLeave\n");
+        m_engine->EndExternalDropPreview(false);  // 取消拖放 → 撤销预览（不落盘）
+        m_dragPaths.clear();
+        return S_OK;
+    }
+    STDMETHODIMP Drop(IDataObject* pdo, DWORD, POINTL ptl, DWORD* pe) override {
+        POINT pt = { (LONG)ptl.x, (LONG)ptl.y };
+        m_engine->DebugLog(L"[DROP] Drop active=%d pt=(%d,%d)\n",
+                           (int)m_engine->ExternalDragPreviewActive(), (int)pt.x, (int)pt.y);
+        if (m_engine->ExternalDragPreviewActive()) {
+            m_engine->MoveExternalDropPreview(pt);     // 以最终光标位兜底校准槽位
+            m_engine->EndExternalDropPreview(true);    // 提交：占位转正 + 落盘
+        } else {
+            // 兜底：未经过预览（异常路径）→ 直接插入到光标位置
+            FORMATETC fe = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+            STGMEDIUM med = {};
+            if (SUCCEEDED(pdo->GetData(&fe, &med)) && med.hGlobal) {
+                HDROP hdrop = (HDROP)med.hGlobal;
+                UINT n = DragQueryFileW(hdrop, 0xFFFFFFFF, nullptr, 0);
+                int insertAt = m_engine->ComputeDragInsertIndex(pt);
+                for (UINT i = 0; i < n; ++i) {
+                    wchar_t buf[MAX_PATH + 2] = {};
+                    if (DragQueryFileW(hdrop, i, buf, MAX_PATH + 1)) {
+                        m_engine->AddIconFromDrop(std::wstring(buf), insertAt);
+                        ++insertAt;   // 多文件依次右移，保持拖入顺序
+                    }
+                }
+                ReleaseStgMedium(&med);
+            }
+        }
+        m_dragPaths.clear();
         if (pe) *pe = DROPEFFECT_COPY;
         return S_OK;
     }
 private:
     DockEngine* m_engine;
     LONG m_ref;
+    std::vector<std::wstring> m_dragPaths;   // DragEnter 缓存的拖入路径
 };
 
 DockEngine::DockEngine() {
     QueryPerformanceFrequency(&m_perfFrequency);
+    // 调试日志开关：运行前设置 OPEN_DOCK_DEBUG=1 即开启（诊断拖放预览用，平时零开销）。
+    m_dbg = (getenv("OPEN_DOCK_DEBUG") != nullptr);
 }
 
 DockEngine::~DockEngine() {
@@ -103,6 +156,10 @@ HRESULT DockEngine::InitializeFromFile(const std::string& configPath) {
 
 HRESULT DockEngine::Initialize(const AppConfig& config) {
     m_appConfig = config;
+
+    // 诊断横幅：仅在 OPEN_DOCK_DEBUG=1 时写出。用于确认「当前运行的二进制是否包含本会话的预览代码」。
+    // 若设置环境变量后运行仍【完全没有】 debug_output/openDock.log，则证明跑的是旧预编译版（release/），与源码无关。
+    DebugLog(L"[BOOT] openDock started, PREVIEW_DEBUG build, m_exeDir=%s\n", m_exeDir.c_str());
 
     // #3 多实例：若由 DockManager 注入共享图标存储，使本地镜像与共享存储一致
     if (m_sharedEdgeIcons) m_appConfig.edgeIcons = *m_sharedEdgeIcons;
@@ -183,6 +240,13 @@ HRESULT DockEngine::Initialize(const AppConfig& config) {
 
     auto imgs = m_iconProvider->LoadIcons(m_appConfig);
     if (!imgs.empty()) m_render->LoadIconTextures(imgs);
+    // 记录当前已加载位图对应的图标路径顺序（轻量重排复用，不解码）
+    {
+        std::vector<std::wstring> rpaths;
+        rpaths.reserve(m_appConfig.icons.size());
+        for (auto& e : m_appConfig.icons) rpaths.push_back(e.path);
+        m_render->SetIconRenderPaths(rpaths);
+    }
     // 缓存显示名（Tooltip 每帧使用，避免重复取）
     m_iconNames.resize(m_appConfig.icons.size());
     for (size_t i = 0; i < m_iconNames.size(); ++i)
@@ -340,7 +404,8 @@ void DockEngine::OnAnimationTick(float dt) {
     m_perfLayoutUs += (double)(pfB.QuadPart - pfA.QuadPart) * 1e6 / (double)pfFreq.QuadPart;
     m_perfFrames++;
 
-    // Step 8 / #4：拖拽进行中（已发生位移）→ 被拖图标跟随光标
+    // Step 8：显示区内拖动图标调整顺序 → 被拖图标位置跟随光标实时更新；
+    // 放大/缩小效果保持原有鱼眼逻辑（由 ApplyHoverTargets 按光标位置驱动）。
     if (m_dragging && m_dragMoved && m_dragIndex >= 0
         && m_dragIndex < (int)m_currentLayouts.size() && m_window) {
         RECT dr = m_window->GetDockRect();
@@ -352,9 +417,25 @@ void DockEngine::OnAnimationTick(float dt) {
         m_geom->inverseMap(dlx, dly, m_dockWidth, m_dockHeight,
                            m_appConfig.dock.baseIconSize, m_appConfig.dock.dockPadding,
                            mainX, cross);
-        m_currentLayouts[m_dragIndex].x     = mainX;
-        m_currentLayouts[m_dragIndex].y     = cross;
-        m_currentLayouts[m_dragIndex].scale = 1.15f;
+        m_currentLayouts[m_dragIndex].x      = mainX;
+        m_currentLayouts[m_dragIndex].y      = cross;
+    }
+
+    if (m_externalDragActive && m_externalDragFloat >= 0
+        && m_externalDragFloat < (int)m_currentLayouts.size() && m_window) {
+        RECT dr = m_window->GetDockRect();
+        float winX = (float)(m_lastMousePos.x - (dr.left - m_insetL));
+        float winY = (float)(m_lastMousePos.y - (dr.top  - m_insetT));
+        float dlx = winX - (float)m_insetL;
+        float dly = winY - (float)m_insetT;
+        float mainX = 0.0f, cross = 0.0f;
+        m_geom->inverseMap(dlx, dly, m_dockWidth, m_dockHeight,
+                           m_appConfig.dock.baseIconSize, m_appConfig.dock.dockPadding,
+                           mainX, cross);
+        m_currentLayouts[m_externalDragFloat].x     = mainX;
+        m_currentLayouts[m_externalDragFloat].y     = cross;
+        // 不强制 scale：放大/缩小走原有鱼眼逻辑（MoveExternalDropPreview 显式 ApplyHoverTargets），
+        // 使被拖占位图标在光标处的放大/悬停效果与原图标一致。
     }
 
     // 渲染（Windowed: 零重绘 Transform；Headless: 记录布局）
@@ -550,10 +631,163 @@ std::wstring DockEngine::GetIconName(int index) const { return m_iconSet->GetIco
 int DockEngine::GetIconTextureCount() const { return m_iconSet->GetIconTextureCount(); }
 bool DockEngine::RemoveIcon(int index, bool persist) { return m_iconSet->RemoveIcon(index, persist); }
 bool DockEngine::ReorderIcon(int from, int to, bool persist) { return m_iconSet->ReorderIcon(from, to, persist); }
-bool DockEngine::AddIcon(const std::wstring& path, const std::wstring& name, bool persist) { return m_iconSet->AddIcon(path, name, persist); }
+void DockEngine::LiveDragReorder(const POINT& pt) {
+    // Step 8 / #4：拖拽进行中（已越 4px 阈值）→ 实时重排预览。
+    // 根据光标在 Dock 显示区内的位置，把被拖图标插入对应槽位；其余图标按新顺序由
+    // CalculateLayout 即时重排（槽位位置是几何推导、非弹簧，故为实时位移）。落盘延后到
+    // WM_LBUTTONUP；光标移出显示区则交给删除分支处理。
+    if (m_dragIndex < 0 || m_dragIndex >= (int)m_appConfig.icons.size()) return;
+    RECT dr = m_window ? m_window->GetDockRect() : RECT{};
+    RECT within = dr;
+    InflateRect(&within, 8, 8);   // 与 WM_LBUTTONUP 的 dropR 容差一致
+    if (!PtInRect(&within, pt)) return;
+
+    const int insert = ComputeDragInsertIndex(pt);
+    // ComputeDragInsertIndex 可能把「自身槽位」判为 best（光标恰在被拖图标静息位附近），
+    // 此时 insert==m_dragIndex 或 m_dragIndex+1，但净位置不变 —— 跳过以避免每次
+    // WM_MOUSEMOVE 都触发一次无谓的整体重建（重载纹理 + 重启动画循环）。
+    const int newIndex = (m_dragIndex < insert) ? insert - 1 : insert;
+    if (newIndex == m_dragIndex) return;
+
+    // 轻量重排：复用已解码位图，不重新解码 / 不重定位窗口 —— 消除拖拽过程闪烁
+    m_iconSet->ReorderIconsDuringDrag(m_dragIndex, insert);   // persist=false：实时重排不落盘
+    m_dragIndex = newIndex;
+}
+bool DockEngine::AddIcon(const std::wstring& path, const std::wstring& name, bool persist, int insertAt) { return m_iconSet->AddIcon(path, name, persist, insertAt); }
 void DockEngine::PersistConfigTo(const std::string& path) const { m_iconSet->PersistConfigTo(path); }
-void DockEngine::AddIconFromDrop(const std::wstring& path) { m_iconSet->AddIconFromDrop(path); }
+void DockEngine::AddIconFromDrop(const std::wstring& path, int insertAt) { m_iconSet->AddIconFromDrop(path, insertAt); }
+
+// ═══════════════════════════════════════════════════════════
+// 外部文件拖放实时预览（IDropTarget 进行中）
+// ═══════════════════════════════════════════════════════════
+void DockEngine::BeginExternalDropPreview(const std::vector<std::wstring>& paths, POINT pt) {
+    if (paths.empty()) return;
+    if (m_externalDragActive) EndExternalDropPreview(false);   // 异常重入：先撤销旧预览
+    m_lastMousePos = pt;
+    int insert = ComputeDragInsertIndex(pt);
+    auto& v = m_appConfig.icons;
+    // 在光标槽位插入连续 count 个半透明占位（preview=true），其余图标由 CalculateLayout 即时让位。
+    int count = 0;
+    for (const auto& path : paths) {
+        IconEntry e;
+        e.path = path;
+        e.name = PathUtil::DeriveDisplayName(path);
+        if (!PathUtil::IsAbsolutePath(e.path)) e.path = m_exeDir + e.path;
+        int at = insert + count;
+        if (at < 0 || at > (int)v.size()) at = (int)v.size();
+        e.preview = true;
+        v.insert(v.begin() + at, e);
+        ++count;
+    }
+    m_externalDragActive = true;
+    m_externalDragStart  = insert;
+    m_externalDragCount  = count;
+    m_externalDragFloat  = insert;   // 浮动首个占位（跟随光标显示被拖图标）
+    if (m_window && !m_window->IsVisible()) Show();   // 确保预览可见（autoHide 隐藏态兜底）
+    SyncCurrentEdgeIcons();   // 同步内存（含预览），不落盘
+    RebuildIcons(false);      // 重建布局/弹簧/纹理 + 重启动画循环；不落盘
+    // 重建弹簧后显式驱动一次鱼眼放大，使初始光标处的被拖占位图标即与原图标悬停效果一致。
+    {
+        float mx = m_geom->screenToMainAxis(
+            (float)pt.x - (m_window ? (float)m_window->GetDockRect().left : 0.0f),
+            (float)pt.y - (m_window ? (float)m_window->GetDockRect().top : 0.0f),
+            m_dockWidth, m_dockHeight);
+        ApplyHoverTargets(mx);
+    }
+    DebugLog(L"[DROP] BeginPreview done paths=%d insert=%d iconsNow=%d float=%d visible=%d\n",
+             (int)paths.size(), insert, (int)m_appConfig.icons.size(),
+             m_externalDragFloat, m_window ? (int)m_window->IsVisible() : -1);
+}
+
+void DockEngine::MoveExternalDropPreview(POINT pt) {
+    if (!m_externalDragActive || m_externalDragCount <= 0) return;
+    m_lastMousePos = pt;   // 浮动 override 用最新光标位置
+    // OLE 拖拽不经由 HandleMouseMove，故在此显式维持鱼眼放大：被拖占位图标随光标放大/悬停，
+    // 与原图标悬停效果一致（ApplyHoverTargets 按光标主轴位置驱动全部图标 scale 目标）。
+    {
+        float mx = m_geom->screenToMainAxis(
+            (float)pt.x - (m_window ? (float)m_window->GetDockRect().left : 0.0f),
+            (float)pt.y - (m_window ? (float)m_window->GetDockRect().top : 0.0f),
+            m_dockWidth, m_dockHeight);
+        ApplyHoverTargets(mx);
+    }
+    int insert = ComputeDragInsertIndex(pt);
+    if (insert == m_externalDragStart) return;   // 仍在当前间隙内，无需搬动
+    auto& v = m_appConfig.icons;
+    // 把预览块从旧位置搬到新位置（保持内部顺序）。erase 在 start 之后会使目标偏移左移 count。
+    std::vector<IconEntry> block;
+    block.reserve(m_externalDragCount);
+    for (int i = 0; i < m_externalDragCount; ++i)
+        block.push_back(v[m_externalDragStart + i]);
+    v.erase(v.begin() + m_externalDragStart,
+            v.begin() + m_externalDragStart + m_externalDragCount);
+    int dest = insert;
+    if (dest > m_externalDragStart) dest -= m_externalDragCount;   // erase 后下标修正
+    if (dest < 0) dest = 0;
+    if (dest > (int)v.size()) dest = (int)v.size();
+    v.insert(v.begin() + dest, block.begin(), block.end());
+    m_externalDragStart = dest;
+    m_externalDragFloat = dest;
+    SyncCurrentEdgeIcons();
+    // 轻量重排（复用已解码位图，不重新解码图标 / 不重定位窗口）—— 消除外部拖入时
+    // 占位让位造成的整组纹理重载闪烁（与内部拖动 LiveDragReorder 同一路径）。
+    m_iconSet->RelayoutDuringDrag();
+    DebugLog(L"[DROP] MovePreview insert=%d startNow=%d icons=%d\n",
+             insert, m_externalDragStart, (int)m_appConfig.icons.size());
+}
+
+void DockEngine::EndExternalDropPreview(bool commit) {
+    if (!m_externalDragActive) return;
+    auto& v = m_appConfig.icons;
+    if (commit) {
+        // 占位转正：preview=false 保留路径/顺序，随后落盘。
+        for (int i = 0; i < m_externalDragCount && m_externalDragStart + i < (int)v.size(); ++i)
+            v[m_externalDragStart + i].preview = false;
+        SyncCurrentEdgeIcons();
+        RebuildIcons(true);    // 落盘
+    } else {
+        // 撤销：移除预览块恢复原布局（不落盘）。
+        int cnt = std::min(m_externalDragCount, (int)v.size() - m_externalDragStart);
+        if (cnt > 0) v.erase(v.begin() + m_externalDragStart,
+                             v.begin() + m_externalDragStart + cnt);
+        SyncCurrentEdgeIcons();
+        RebuildIcons(false);
+    }
+    m_externalDragActive = false;
+    m_externalDragStart  = -1;
+    m_externalDragCount  = 0;
+    m_externalDragFloat  = -1;
+}
 void DockEngine::ApplyEntryTargets(int iconIndex) { m_iconSet->ApplyEntryTargets(iconIndex); }
+
+// ═══════════════════════════════════════════════════════════
+// 调试日志（真机 GUI 缺陷取证；落盘 <exedir>/debug_output/openDock.log）
+// ═══════════════════════════════════════════════════════════
+void DockEngine::DebugLog(const wchar_t* fmt, ...) {
+    if (!m_dbg) return;   // 仅 OPEN_DOCK_DEBUG=1 时写出，平时零开销
+    // 目录优先取 exe 目录（GetModuleFileNameW，不依赖 m_exeDir）；取不到则回退 %TEMP%。
+    std::wstring dir;
+    wchar_t buf[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, buf, MAX_PATH)) {
+        std::wstring p(buf);
+        size_t slash = p.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) dir = p.substr(0, slash + 1);
+    }
+    if (dir.empty()) {
+        wchar_t tmp[MAX_PATH] = {};
+        if (GetTempPathW(MAX_PATH, tmp)) dir = tmp;
+    }
+    if (dir.empty()) dir = L".";
+    std::wstring outDir = dir + L"debug_output";
+    CreateDirectoryW(outDir.c_str(), nullptr);
+    std::wstring path = outDir + L"\\openDock.log";
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"a, ccs=UTF-8") != 0 || !f) return;
+    va_list ap; va_start(ap, fmt);
+    vfwprintf(f, fmt, ap);
+    va_end(ap);
+    fflush(f); fclose(f);
+}
 void DockEngine::ApplyHoverTargets(float mouseXCentered) { m_iconSet->ApplyHoverTargets(mouseXCentered); }
 void DockEngine::ApplyRestTargets() { m_iconSet->ApplyRestTargets(); }
 bool DockEngine::AnyScaleElevated() const { return m_iconSet->AnyScaleElevated(); }

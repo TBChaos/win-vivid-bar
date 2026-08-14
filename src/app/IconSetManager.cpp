@@ -95,6 +95,13 @@ void IconSetManager::RebuildIcons(bool persist) {
     // 重新加载图标纹理与显示名
     auto imgs = m_owner->m_iconProvider->LoadIcons(m_owner->m_appConfig);
     if (m_owner->m_render) m_owner->m_render->RebuildIconSet(imgs);
+    // 记录当前已加载位图对应的图标路径顺序（轻量重排复用，不解码）
+    if (m_owner->m_render) {
+        std::vector<std::wstring> paths;
+        paths.reserve(m_owner->m_appConfig.icons.size());
+        for (auto& e : m_owner->m_appConfig.icons) paths.push_back(e.path);
+        m_owner->m_render->SetIconRenderPaths(paths);
+    }
     m_owner->m_iconNames.resize(m_owner->m_appConfig.icons.size());
     for (size_t i = 0; i < m_owner->m_iconNames.size(); ++i)
         m_owner->m_iconNames[i] = m_owner->m_iconProvider->GetDisplayName(i);
@@ -126,23 +133,36 @@ bool IconSetManager::RemoveIcon(int index, bool persist) {
 }
 
 bool IconSetManager::ReorderIcon(int from, int to, bool persist) {
-    int n = (int)m_owner->m_appConfig.icons.size();
-    if (from < 0 || from >= n) return false;
-    if (to < 0) to = 0;
-    if (to > n - 1) to = n - 1;
-    if (from == to) return false;
-    IconEntry e = m_owner->m_appConfig.icons[from];
-    m_owner->m_appConfig.icons.erase(m_owner->m_appConfig.icons.begin() + from);
-    int dest = (from < to) ? to - 1 : to;   // 删除后索引偏移修正
-    if (dest < 0) dest = 0;
-    if (dest > (int)m_owner->m_appConfig.icons.size()) dest = (int)m_owner->m_appConfig.icons.size();
-    m_owner->m_appConfig.icons.insert(m_owner->m_appConfig.icons.begin() + dest, e);
+    // 纯数组重排（可单测）；from/to 为原始数组下标语义，to==n 表示拖到末尾。
+    if (!ReorderIconEntries(m_owner->m_appConfig.icons, from, to)) return false;
     m_owner->SyncCurrentEdgeIcons();   // #4/#3 同步当前边（含共享存储）
     m_owner->RebuildIcons(persist);
     return true;
 }
 
-bool IconSetManager::AddIcon(const std::wstring& path, const std::wstring& name, bool persist) {
+bool IconSetManager::ReorderIconsDuringDrag(int from, int to) {
+    // 拖拽过程轻量重排：仅数据重排 + 视觉轻量重排（复用已解码位图），不落盘、
+    // 不重新解码、不重定位窗口 —— 消除拖拽过程中整组纹理重载 / 窗口重定位造成的闪烁。
+    if (!ReorderIconEntries(m_owner->m_appConfig.icons, from, to)) return false;
+    SyncCurrentEdgeIcons();
+    RelayoutDuringDrag();
+    return true;
+}
+
+void IconSetManager::RelayoutDuringDrag() {
+    // 增量重建弹簧（按 path 复用，稳定图标保留动画状态）
+    ReconcileSprings(m_owner->m_appConfig.icons, 1.0f);
+    // 复用已解码位图按 path 轻量重排视觉树（不重新解码、不重定位窗口、不重建背景）
+    std::vector<std::wstring> paths;
+    paths.reserve(m_owner->m_appConfig.icons.size());
+    for (auto& e : m_owner->m_appConfig.icons) paths.push_back(e.path);
+    if (m_owner->m_render) m_owner->m_render->RelayoutIcons(paths);
+    // 立即重算静息布局，确保下一帧 tick 前画面已反映新顺序
+    m_owner->m_currentLayouts = EnsureRestLayout();
+    if (m_owner->GetHwnd()) m_owner->StartAnimationLoop();
+}
+
+bool IconSetManager::AddIcon(const std::wstring& path, const std::wstring& name, bool persist, int insertAt) {
     if (path.empty()) return false;
     IconEntry e;
     e.path = path;
@@ -150,16 +170,21 @@ bool IconSetManager::AddIcon(const std::wstring& path, const std::wstring& name,
     // （正确处理驱动器根/尾部分隔符/点开头/含点文件夹名等边界，避免把完整路径写进 name 字段）。
     e.name = name.empty() ? PathUtil::DeriveDisplayName(path) : name;
     if (!PathUtil::IsAbsolutePath(e.path)) e.path = m_owner->m_exeDir + e.path;
-    m_owner->m_appConfig.icons.push_back(e);
+    auto& v = m_owner->m_appConfig.icons;
+    if (insertAt < 0 || insertAt >= (int)v.size()) {
+        v.push_back(e);                         // 默认：追加到末尾
+    } else {
+        v.insert(v.begin() + insertAt, e);      // 拖放插入到光标位置（可落在中间）
+    }
     m_owner->SyncCurrentEdgeIcons();   // #4/#3 同步当前边（含共享存储）
     m_owner->RebuildIcons(persist);
     return true;
 }
 
-void IconSetManager::AddIconFromDrop(const std::wstring& path) {
+void IconSetManager::AddIconFromDrop(const std::wstring& path, int insertAt) {
     // 统一走 PathUtil::DeriveDisplayName（与 AddIcon 共用，边界语义一致）
     std::wstring name = PathUtil::DeriveDisplayName(path);
-    m_owner->AddIcon(path, name, true);
+    m_owner->AddIcon(path, name, true, insertAt);
 }
 
 void IconSetManager::PersistConfigTo(const std::string& path) const {
@@ -594,6 +619,6 @@ int IconSetManager::ComputeDragInsertIndex(POINT pt) {
         if (d < bestD) { bestD = d; best = i; }
     }
     int to = (mouseMain > rest[best].x) ? (best + 1) : best;
-    if (to > n - 1) to = n - 1;
+    if (to > n) to = n;   // 允许 n：释放点越过最后一个图标 → 拖到末尾（修复末端插入缺陷）
     return to;
 }

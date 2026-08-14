@@ -105,6 +105,13 @@ void DockInteraction::HandleMouseMove(int screenX, int screenY) {
     } else {
         m_owner->HandleMouseLeave();
     }
+
+    // Step 8 / #4：拖拽进行中（已越 4px 阈值）→ 实时重排预览：其它图标按光标位置即时位移，
+    // 被拖图标继续跟随光标；最终顺序待 WM_LBUTTONUP 落盘。光标移出显示区由删除分支处理。
+    if (m_owner->m_dragging && m_owner->m_dragMoved) {
+        m_owner->LiveDragReorder(pt);
+    }
+
     // #1：若本次移动使鱼眼进入放大态，启动看门狗以探测光标离开（即便非穿透/非自动隐藏），
     // 防止 WM_MOUSELEAVE 因 HTTRANSPARENT 穿透漏发导致放大卡死。
     m_owner->UpdateIdleWatchdog();
@@ -190,7 +197,8 @@ void DockInteraction::HandleClick(int screenX, int screenY) {
     // 点下去却弹了另一张/启动了错的应用」。改为就地重算按下点的命中。
     const int hitIndex = ResolveHitIndexAt(pt);
     if (hitIndex >= 0 &&
-        (m_owner->m_state == DockState::Hovering || m_owner->m_state == DockState::Idle)) {
+        (m_owner->m_state == DockState::Hovering || m_owner->m_state == DockState::Idle
+         || m_owner->m_state == DockState::Bouncing)) {
         float cx = 0.0f, cy = 0.0f;
         m_owner->GetIconCurrentScreenCenter(hitIndex, cx, cy);
         // 命中即把视觉悬停态对齐到动作命中，避免 tooltip 指向另一张图标。
@@ -281,7 +289,12 @@ LRESULT DockInteraction::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 InflateRect(&dropR, 8, 8);   // 容差：拖出 Dock 条外即视为「拖拽删除」
                 if (PtInRect(&dropR, pt)) {
                     int insert = m_owner->ComputeDragInsertIndex(pt);   // 在 Dock 内释放 → 重排
-                    m_owner->ReorderIcon(actIndex, insert, true);
+                    // 实时重排期间数据已按光标更新、但 persist=false 未落盘；松开时若最终位置
+                    // 已就位（ReorderIcon 返回 false 不落盘），需显式 PersistConfig 把最终顺序
+                    // 写入磁盘，否则实时重排结果会丢失。
+                    if (!m_owner->ReorderIcon(actIndex, insert, true)) {
+                        m_owner->PersistConfig();
+                    }
                 } else {
                     m_owner->RemoveIcon(actIndex, true);             // 拖出 Dock → 删除
                 }

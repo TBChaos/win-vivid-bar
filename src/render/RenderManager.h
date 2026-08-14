@@ -11,6 +11,8 @@
 #include "../app/IconProvider.h"    // IconProvider::IconImage（内存 PNG 字节 / 可选路径）
 #include <d2d1.h>
 #include <dwrite.h>
+#include <unordered_map>
+#include <vector>
 
 class RenderManager {
 public:
@@ -50,6 +52,13 @@ public:
 
     // 动态重建图标集（Step 8：删除/重排/添加后）—— 重建视觉树与背景尺寸
     HRESULT RebuildIconSet(const std::vector<IconProvider::IconImage>& imgs);
+
+    // 拖拽过程轻量重排：仅按 path 顺序复用【已解码】位图重排视觉树与背景，
+    // 不重新解码图标、不重定位窗口、不重建背景条 —— 用于拖拽过程中顺序改变时，
+    // 避免整组纹理重载 / 窗口重定位导致的原有图标闪烁（外部拖入尤为明显）。
+    void RelayoutIcons(const std::vector<std::wstring>& orderedPaths);
+    // 记录当前已加载位图对应的图标路径顺序（轻量重排复用，不解码）；RebuildIcons/Initialize 时调用。
+    void SetIconRenderPaths(const std::vector<std::wstring>& paths);
 
     // 动画更新
     //   Windowed: 仅更新 Visual Transform/Opacity（零重绘路径）
@@ -182,6 +191,7 @@ private:
     ComPtr<IDCompositionVisual>  m_backgroundVisual;
     ComPtr<IDCompositionVisual>  m_tooltipVisual;    // 悬停名称标签（置于最上层）
     std::vector<ComPtr<IDCompositionVisual>> m_iconVisuals;
+    std::vector<std::wstring> m_iconRenderPaths;      // 当前已加载位图对应的图标 path 顺序（轻量重排复用，不解码）
     // 图标阴影效果图（Windowed）：Shadow → AffineTransform2D(偏移) → Composite(叠原图)
     struct ShadowGraph {
         ComPtr<IDCompositionShadowEffect>            shadow;

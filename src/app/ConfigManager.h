@@ -12,7 +12,32 @@ struct IconEntry {
     std::wstring name;       // 显示名（Tooltip）
     std::wstring args;       // 启动参数（可选）
     std::wstring workingDir; // 工作目录（可选，相对路径按 exe 目录解析）
+    bool         preview = false;  // 拖放预览占位（不落盘；落盘前必转正或移除）
 };
+
+// ═══ 拖拽排序的纯数组重排（与渲染/窗口/COM 无关，可独立单测）═══
+// from / to 均为【原始数组】下标语义：
+//   - from：被拖拽图标原下标；
+//   - to  ：释放点在原始数组中的「插入位」（0=最前，n=最后/附加到末尾）。
+// 删除 from 后，对剩余数组做插入位偏移修正：
+//   dest = (from < to) ? to - 1 : to
+// 关键修复：to 允许取到 n（拖到【最末尾】），旧实现把 to clamp 到 n-1 导致
+// 「拖到 Dock 末尾」永远落回倒数第二，顺序更新功能在末端失效。
+// 返回 true 表示顺序确实发生了改变（from==to 或越界返回 false = 无操作）。
+inline bool ReorderIconEntries(std::vector<IconEntry>& v, int from, int to) {
+    const int n = (int)v.size();
+    if (from < 0 || from >= n) return false;
+    if (to < 0) to = 0;
+    if (to > n) to = n;        // 允许 n：附加到末尾（修复末端插入缺陷）
+    if (from == to) return false;
+    IconEntry e = v[from];
+    v.erase(v.begin() + from);
+    int dest = (from < to) ? to - 1 : to;   // 删除后索引偏移修正
+    if (dest < 0) dest = 0;
+    if (dest > (int)v.size()) dest = (int)v.size();
+    v.insert(v.begin() + dest, e);
+    return true;
+}
 
 struct AppConfig {
     DockConfig dock;                       // 布局/物理参数

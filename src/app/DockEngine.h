@@ -119,11 +119,21 @@ public:
     std::wstring GetIconName(int index) const;
     bool RemoveIcon(int index, bool persist = true);    // 右键删除
     bool ReorderIcon(int from, int to, bool persist = true); // 拖拽排序
+    void LiveDragReorder(const POINT& pt);                  // 拖拽实时重排预览（不落盘）
     bool AddIcon(const std::wstring& path, const std::wstring& name = L"",
-                 bool persist = true);                   // 拖拽添加
+                 bool persist = true, int insertAt = -1); // 拖拽添加；insertAt>=0 插入到指定下标
     void PersistConfigTo(const std::string& path) const; // 写入当前配置（验证用）
     // 文件拖放回调（IDropTarget）
-    void AddIconFromDrop(const std::wstring& path);
+    void AddIconFromDrop(const std::wstring& path, int insertAt = -1);
+
+    // 外部拖放实时预览（IDropTarget 进行中）：拖入时光标槽位插入半透明占位、其余图标让位、
+    // 被拖（占位）图标跟随光标；落盘前占位转正 / 离开撤销。与「拖拽改变顺序」共用插入位算法。
+    void BeginExternalDropPreview(const std::vector<std::wstring>& paths, POINT pt);
+    void MoveExternalDropPreview(POINT pt);
+    void EndExternalDropPreview(bool commit);   // commit=true 占位转正并落盘；false 撤销
+    bool ExternalDragPreviewActive() const { return m_externalDragActive; }
+    // 调试日志（真机 GUI 缺陷取证用，落盘到 <exedir>/debug_output/openDock.log）
+    void DebugLog(const wchar_t* fmt, ...);
 
     // ═══ 开机自启动 + 位置微调 + 图层 Z 序（Step 10）═══
     void ApplyPlacement();               // 依配置(position/offset/monitor/zOrder)定位窗口
@@ -254,6 +264,7 @@ private:
     friend class IconSetManager;
     friend class DockInteraction;
     friend class DockManager;
+    friend class DockDropTarget;   // 文件拖放：Drop 内需 ComputeDragInsertIndex 计算插入位
     std::unique_ptr<DockStateMachine> m_stateMachine;
     std::unique_ptr<IconSetManager>   m_iconSet;
     std::unique_ptr<DockInteraction>  m_interaction;
@@ -332,6 +343,12 @@ private:
     bool  m_dragging   = false;
     bool  m_dragMoved  = false;        // 拖拽中是否发生明显位移（区分点击/拖拽）
     POINT m_dragStart  = {};
+    // 外部文件拖放预览（IDropTarget 进行中）：拖入时在光标槽位插入半透明占位，
+    // 其余图标让位；被拖（占位）图标跟随光标。落盘前转正 / 离开撤销。
+    bool  m_externalDragActive = false;  // 预览进行中
+    int   m_externalDragStart  = -1;     // 预览块起始下标（连续 m_externalDragCount 个）
+    int   m_externalDragCount  = 0;      // 预览占位数量
+    int   m_externalDragFloat  = -1;     // 跟随光标浮动的占位下标（-1=不浮动）
     Microsoft::WRL::ComPtr<IDropTarget> m_dropTarget;  // 文件拖放目标（仅 Windowed）
     void RebuildIcons(bool persist);   // 重建布局/弹簧/渲染/窗口并（可选）持久化
     // #3/#4 同步当前边图标集（含共享存储），供增删/重排/切换边调用；单引擎下同步顶层 sharedIcons
@@ -354,6 +371,7 @@ private:
     long long m_perfFrames = 0;
     bool m_comInitialized = false;   // 本层是否负责 CoInitializeEx（Shutdown 时对应 CoUninitialize）
     std::wstring m_exeDir;           // exe 所在目录（带结尾反斜杠），用于解析相对资源路径
+    bool        m_dbg = false;       // 调试日志开关（OPEN_DOCK_DEBUG 环境变量置位，诊断拖放预览用）
 
     // 系统托盘
     NOTIFYICONDATAW m_nid = {};

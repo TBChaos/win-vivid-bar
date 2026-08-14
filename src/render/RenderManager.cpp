@@ -535,6 +535,50 @@ HRESULT RenderManager::CreateIconSurface(size_t index) {
     return S_OK;
 }
 
+// Windowed：白色蒙版特性已移除（用户放弃「虚化」概念，不再叠加白色蒙版）。
+// 拖拽中的图标仅通过位置跟随光标 + 弹簧动画呈现，不再有半透明 / 蒙版视觉。
+
+void RenderManager::SetIconRenderPaths(const std::vector<std::wstring>& paths) {
+    m_iconRenderPaths = paths;
+}
+
+// 拖拽过程轻量重排：图标【集合】不变（仅顺序变化），按 path 复用已解码位图重新排列视觉树，
+// 不重新解码图标（WIC）、不重定位窗口（computeBarSize 不变）、不重建背景条 —— 消除拖拽时
+// 整组纹理重载 / 窗口重定位造成的闪烁。视觉下标与 m_iconRenderPaths 一一对应。
+void RenderManager::RelayoutIcons(const std::vector<std::wstring>& orderedPaths) {
+    const int n = static_cast<int>(orderedPaths.size());
+    if (n <= 0) return;
+
+    // 旧 path → 下标映射（路径集合不变，仅顺序变化 → 双射）
+    std::unordered_map<std::wstring, int> oldIndex;
+    for (int i = 0; i < (int)m_iconRenderPaths.size(); ++i)
+        oldIndex[m_iconRenderPaths[i]] = i;
+
+    if (m_renderMode != RenderMode::GDI_Fallback && m_mode == Mode::Windowed) {
+        std::vector<ComPtr<ID2D1Bitmap1>> next;
+        next.resize(static_cast<size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            auto it = oldIndex.find(orderedPaths[i]);
+            if (it != oldIndex.end() && it->second < (int)m_iconBitmaps.size())
+                next[(size_t)i] = m_iconBitmaps[(size_t)it->second];
+        }
+        m_iconBitmaps = std::move(next);
+        for (int i = 0; i < n && i < (int)m_iconVisuals.size(); ++i)
+            CreateIconSurface((size_t)i);   // 复用已解码位图重烘焙（无 WIC 解码）
+    } else if (m_renderMode == RenderMode::GDI_Fallback) {
+        std::vector<GdiIcon> next;
+        next.resize(static_cast<size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            auto it = oldIndex.find(orderedPaths[i]);
+            if (it != oldIndex.end() && it->second < (int)m_gdiIcons.size())
+                next[(size_t)i] = m_gdiIcons[(size_t)it->second];
+        }
+        m_gdiIcons = std::move(next);
+    }
+
+    m_iconRenderPaths = orderedPaths;
+}
+
 // Windowed：为根背景 Visual 烘焙圆角半透明 Dock 底座
 HRESULT RenderManager::CreateBackgroundSurface() {
     if (!m_backgroundVisual) return S_OK;   // 防御：Headless 不创建背景
@@ -626,6 +670,7 @@ void RenderManager::UpdateVisualTransforms(const std::vector<IconLayout>& layout
 
     // ⚡ 零重绘路径：仅修改 Visual 属性，由 DWM 在 GPU 完成变换
     // ADR §1.5 INV-VISUAL：绘制像素范围必须由 iconVisualRect 推导，不得自行 mapLayout。
+
     const IconGeometryParams gp{ m_dockWidth, m_dockHeight,
                                  m_config.baseIconSize, m_config.dockPadding };
     for (size_t i = 0; i < layouts.size() && i < m_iconVisuals.size(); ++i) {

@@ -29,8 +29,15 @@ public:
     int  GetIconTextureCount() const;    // 已成功加载的图标纹理数（调试/验收用）
     bool RemoveIcon(int index, bool persist);    // 右键删除
     bool ReorderIcon(int from, int to, bool persist); // 拖拽排序
-    bool AddIcon(const std::wstring& path, const std::wstring& name, bool persist); // 拖拽添加
-    void AddIconFromDrop(const std::wstring& path);  // IDropTarget 回调
+    // 拖拽过程轻量重排（不落盘 / 不重载纹理 / 不重定位窗口）：仅数据重排 + 视觉轻量重排，
+    // 复用已解码位图消除闪烁；内部拖动 / 外部拖入共用同一逻辑。
+    bool ReorderIconsDuringDrag(int from, int to);
+    // 拖拽过程轻量视觉重排：复用已解码位图按 path 重排视觉树（不重新解码 / 不重定位窗口 /
+    // 不重建背景），并重启动画循环；供 ReorderIconsDuringDrag 与 MoveExternalDropPreview 共用。
+    void RelayoutDuringDrag();
+    bool AddIcon(const std::wstring& path, const std::wstring& name, bool persist,
+                 int insertAt = -1); // 拖拽添加；insertAt>=0 插入到指定下标（-1 追加末尾）
+    void AddIconFromDrop(const std::wstring& path, int insertAt = -1);  // IDropTarget 回调
     void PersistConfigTo(const std::string& path) const; // 写入当前配置（验证用）
 
     // ═══ 弹簧目标设置 ═══
