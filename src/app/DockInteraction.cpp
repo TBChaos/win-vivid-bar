@@ -232,6 +232,27 @@ LRESULT DockInteraction::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         m_owner->HandleMouseLeave();
         break;
 
+    // ── 显示桌面 / Win+D / Win+M 多层防御（第一层：WM_SYSCOMMAND 拦截）──
+    // dock 是 WS_EX_TOOLWINDOW 无任务栏按钮，一旦被最小化无法手工恢复，只能重启进程。
+    // 凡经 WM_SYSCOMMAND 发起的最小化（部分任务管理器 / 自动化工具 / Alt+Space 路径）直接吞掉，
+    // 不转发 DefWindowProc，窗口永不进入最小化态。业务隐藏（autoHide/Hidden）走 SW_HIDE，
+    // 不经过 WM_SYSCOMMAND，故此处拦截不影响 autoHide。
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xFFF0) == SC_MINIMIZE) return 0;
+        break;
+
+    // ── 第二层：WM_SIZE(SIZE_MINIMIZED) 兜底（覆盖 Explorer「显示桌面」直接
+    //    ShowWindow(SW_MINIMIZE) 的路径，该路径不经由 WM_SYSCOMMAND）──
+    // 仅当业务态仍要求可见（m_window->IsVisible()==true）才恢复；autoHide 隐藏态
+    // （IsVisible()==false）放行，绝不误唤出。恢复在内部完成，此处吸收该通知。
+    case WM_SIZE:
+        if (wParam == SIZE_MINIMIZED) {
+            if (m_owner->m_window && m_owner->m_window->IsVisible())
+                m_owner->RestoreFromOsMinimize();
+            return 0;
+        }
+        break;
+
     case WM_LBUTTONDOWN: {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         ClientToScreen(hwnd, &pt);

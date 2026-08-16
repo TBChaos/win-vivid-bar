@@ -214,6 +214,12 @@ int DockManager::Run() {
     // WINEVENT_OUTOFCONTEXT 的事件是投递到注册线程的消息队列的，注册错线程就永远收不到。
     // 同时它依赖 m_trayHwnd 承载去抖 / 兜底 SetTimer，故必须排在 CreateTrayHost 之后。
     InstallOcclusionHook();
+    // 显示桌面 / Win+D / Win+M 兜底看门狗（多层防御第三层）：1s 低频轮询四边 IsIconic，
+    // 覆盖消息拦截（WM_SYSCOMMAND/WM_SIZE）漏网的最坏情形。业务隐藏态（autoHide/Hidden）
+    // 由 RestoreFromOsMinimize 内部的 IsVisible 守卫排除，绝不误唤出。
+    if (m_trayHwnd)
+        m_minimizeWatchdogTimer =
+            SetTimer(m_trayHwnd, TID_MINIMIZE_WATCHDOG, MINIMIZE_WATCHDOG_MS, nullptr);
     // 单一消息循环：所有 Dock 实例的 WM_APP_TICK / 鼠标 / 拖放消息均由各自 WndProc 处理，
     // 托盘回调由本类隐藏宿主窗口的 WndProc 处理。
     // 防御：丢弃进入循环前可能残留的陈旧 WM_QUIT（例如切换 DockManager 前对单实例 engine 的
@@ -381,6 +387,20 @@ bool IsShellBackdropWindow(HWND w) {
     return false;
 }
 
+// 显示桌面检测：前台窗口是桌面背板(WorkerW 壁纸层 / Progman 桌面 / GetShellWindow)时，
+// Explorer「显示桌面 / Win+D」已把桌面窗口置前并盖住 dock。dock 从不进入最小化态，
+// 无法用 IsIconic 判定，必须靠前台窗口类。
+static bool IsDesktopWindow(HWND w) {
+    if (!w) return false;
+    if (w == GetShellWindow()) return true;            // Progman（经典桌面窗口）
+    wchar_t cls[64] = {};
+    if (GetClassNameW(w, cls, (int)(sizeof(cls) / sizeof(cls[0]))) > 0) {
+        if (lstrcmpiW(cls, L"WorkerW") == 0 || lstrcmpiW(cls, L"Progman") == 0)
+            return true;
+    }
+    return false;
+}
+
 // z 序遍历上限（纯防御）。z 序链理论上不成环，但外部注入型软件什么都干得出来；
 // 且 P1-5 的区域相减每步都要建 / 减一个 HRGN，遍历失控的代价比 P0 快路径更高。
 constexpr int kOcclusionWalkGuard = 512;
@@ -534,6 +554,8 @@ void DockManager::RecomputeOcclusion() {
         //     （放大态还指望看门狗兜 WM_MOUSELEAVE 漏发，挂了会卡在放大态）。
         if (e->IsDragging() || e->IsAnyScaleElevated()) {
             e->SetOccluded(false);
+            // 显示桌面激活时仍在操作：确保边已抬到桌面之上（解除遮挡隐藏后也需抬升）。
+            if (m_showDesktopActive) ApplyEffectiveZOrder(e, true);
             continue;
         }
         HWND hwnd = e->GetHwnd();
@@ -554,9 +576,23 @@ void DockManager::RecomputeOcclusion() {
             }
         }
 
-        const bool occ = IsFootprintOccluded(hwnd, foot);
+        const bool wasOcclHid = e->DidOcclusionHideWindow();   // 解除遮挡前的隐藏态
+        bool occ = IsFootprintOccluded(hwnd, foot);
+        // 显示桌面激活时桌面窗口(WorkerW/Progman)盖住一切真实窗口，没有任何 dock 边
+        // 还能被真实窗口遮挡；此处强制不判遮挡，避免屏幕顶边的 footprint 在显示桌面
+        // 期间被时序竞态误置 m_occluded=true（→ autoHide 隐藏边看门狗 TickIdle 首行
+        // 整体 return → hover 永远唤不出，见 ApplyShowDesktopState）。on 时统一清零。
+        if (m_showDesktopActive) occ = false;
         e->SetOccluded(occ);      // 幂等：同值内部直接 return
-        if (occ) anyOccluded = true;
+        if (occ) {
+            anyOccluded = true;
+        } else if (m_showDesktopActive && wasOcclHid &&
+                   !(e->IsHidden() && e->IsAutoHideEnabled())) {
+            // 显示桌面激活期间，任何「从遮挡隐藏恢复为可见」的边都必须重新抬到桌面之上，
+            // 否则它虽被状态机 Show(true) 但仍停在配置 Z 序(HWND_BOTTOM 等)，会被桌面窗口
+            // 盖住 → 唤不出（典型即上边在显示桌面时被遮挡隐藏、解除时漏抬）。
+            ApplyEffectiveZOrder(e, true);
+        }
     }
 
     // 兜底定时器（防漏事件卡死）：仅在【存在被遮挡的边】时运行，全部解除即关。
@@ -581,13 +617,13 @@ void DockManager::ScheduleOcclusionRecompute() {
         SetTimer(m_trayHwnd, TID_OCCLUSION_DEBOUNCE, OCCLUSION_DEBOUNCE_MS, nullptr);
 }
 
-void CALLBACK DockManager::WinEventProc(HWINEVENTHOOK, DWORD event, HWND,
+void CALLBACK DockManager::WinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd,
                                         LONG idObject, LONG idChild, DWORD, DWORD) {
     // 只关心「顶层窗口本身」的事件。这条过滤是性能生命线：
     // EVENT_OBJECT_LOCATIONCHANGE 对 OBJID_CURSOR 会随鼠标移动每帧狂发。
     if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF) return;
     switch (event) {
-    case EVENT_SYSTEM_FOREGROUND:      // 前台切换（恢复路径的主力信号）
+    case EVENT_SYSTEM_FOREGROUND:      // 前台切换：遮挡恢复主力信号 + 显示桌面检测
     case EVENT_SYSTEM_MINIMIZESTART:   // 最小化开始 / 结束
     case EVENT_SYSTEM_MINIMIZEEND:
     case EVENT_OBJECT_SHOW:            // 窗口显示 / 隐藏
@@ -599,7 +635,91 @@ void CALLBACK DockManager::WinEventProc(HWINEVENTHOOK, DWORD event, HWND,
     default:
         return;
     }
-    if (g_occlusionOwner) g_occlusionOwner->ScheduleOcclusionRecompute();
+    if (g_occlusionOwner) {
+        g_occlusionOwner->ScheduleOcclusionRecompute();
+        // 前台切换(含显示桌面把 WorkerW/Progman 置前)同时驱动显示桌面检测：
+        // 置前的是桌面窗口 → 把 dock 抬到桌面之上，避免被「盖住」而失效。
+        if (event == EVENT_SYSTEM_FOREGROUND)
+            g_occlusionOwner->OnForegroundWindowChanged(hwnd);
+    }
+}
+
+// 前台窗口切换 → 显示桌面检测。前台是桌面背板(WorkerW/Progman)即认为「显示桌面」激活。
+// 仅状态翻转时向托盘窗口投递 WM_APP_SHOWDESKTOP，由 TrayWndProc 在消息循环里真正改 Z 序，
+// 避免在 WinEvent 回调内直接做窗口操作引发自激/重入。
+void DockManager::OnForegroundWindowChanged(HWND fg) {
+    if (!fg) fg = GetForegroundWindow();
+    const bool desktop = IsDesktopWindow(fg);
+    if (desktop) m_desktopHwnd = fg;   // 记住当前置前的桌面窗口，用于精准插入其上方
+    if (desktop != m_showDesktopActive) {
+        m_showDesktopActive = desktop;
+        if (m_trayHwnd)
+            PostMessageW(m_trayHwnd, WM_APP_SHOWDESKTOP,
+                         desktop ? (WPARAM)1 : (WPARAM)0, 0);
+    }
+}
+
+// 应用【有效 Z 序】（显示桌面场景专用，全程 SWP_NOACTIVATE 不抢焦点）：
+// - desktop=true（含 autoHide 隐藏态）：把所有边统一抬到 HWND_TOPMOST。
+//     · 旧写法曾用 SetWindowPos(h, 桌面窗口) 把 dock 放到桌面窗口【之下】，结果被
+//       WorkerW/Progman 整屏盖住 → 显示桌面期间完全不可见（日志 pos=3 below=Progman 实证）。
+//       显示桌面时所有普通应用已被最小化，不存在「盖住应用」问题，故统一置顶最稳妥。
+//     · autoHide 隐藏态同样抬升（只改 Z 序、不 ShowWindow），否则 reveal 弹出的窗口会落在
+//       WorkerW 之下、看不到也点不到（这是「显示桌面后四边全唤不出」的根因）。
+// - desktop=false：按配置 m_zOrder 正常落位（HWND_BOTTOM/NOTOPMOST/TOPMOST）。
+void DockManager::ApplyEffectiveZOrder(DockEngine* e, bool desktop) {
+    if (!e) return;
+    WindowManager* wm = e->m_window.get();
+    if (!wm) return;
+    HWND h = wm->GetHwnd();
+    if (!h) return;
+    if (desktop) {
+        // 显示桌面激活：把本边抬到桌面【之上】才可见。
+        // 关键修正：旧写法 SetWindowPos(h, desk=WorkerW/Progman) 把 dock 放到桌面窗口
+        // 【之下】(hWndInsertAfter=桌面窗口 = 置于其下方)，等于压在桌面背后 → 显示桌面期间
+        // 完全不可见。显示桌面时所有普通应用已被最小化，不存在「盖住应用」问题，故统一用
+        // HWND_TOPMOST 把 dock 置于最前，保证可见。退出显示桌面(desktop=false)时 ApplyZOrder
+        // 按配置复原(bottom→HWND_BOTTOM)，「总在后面」语义不丢。autoHide 隐藏边同理抬升、不弹窗。
+        SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    } else {
+        wm->ApplyZOrder(wm->GetZOrder());          // 内部 SWP_NOACTIVATE
+    }
+}
+
+// 应用显示桌面状态到四条 dock 边：
+// - desktop=true：桌面窗口(WorkerW/Progman)被置前并盖住 dock → 把每条【非 autoHide 隐藏态】的边
+//   抬到桌面之上（SWP_NOACTIVATE 不抢焦点）。
+//     · 业务隐藏态(autoHide)：用户未悬停边缘，绝不主动唤出（留交 reveal 逻辑）。
+//     · 被遮挡隐藏态(m_occlusionHidWindow，IsVisible()==false)：显示桌面意味着已无真实窗口遮挡，
+//       交给状态机正规解除 SetOccluded(false)（仅它会 Show(true) 且清 m_occlusionHidWindow），
+//       解除后再抬 Z 序到桌面之上 —— 修复此前「上边被遮挡隐藏后永不抬升、仍被桌面盖住」的缺陷。
+//     · 万一某边被 OS 最小化(IsIconic)也先拉起。
+// - desktop=false：解除 → 恢复配置 Z 序（bottom/normal/topmost 按配置，全程不抢焦点）。
+void DockManager::ApplyShowDesktopState(bool desktop) {
+    for (int i = 0; i < 4; ++i) {
+        DockEngine* e = m_docks[i].get();
+        if (!e) continue;
+        WindowManager* wm = e->m_window.get();
+        if (!wm) continue;
+        HWND h = wm->GetHwnd();
+        if (!h) continue;
+        // 显示桌面激活：桌面窗口(WorkerW/Progman)盖住一切真实窗口，此时任何 dock 都不该处于
+        // 「被遮挡」态。必须清掉【所有边】的 m_occluded（含 autoHide 隐藏边）—— 否则 autoHide
+        // 隐藏边会被卡死：DockStateMachine::TickIdle 首行 `if(m_occluded) return` 整体不执行，
+        // hover 永远唤不出（典型即上边 footprint 在屏顶、静止时被某真实窗口盖住 → m_occluded
+        // 在显示桌面【前】就被置真；显示桌面后桌面盖住真窗、本该清标记让看门狗重新 hover 唤出，
+        // 却因下方 autoHide 隐藏态的 continue 跳过、标记永不清除 → 上边唤不出）。
+        // 清遮挡不会误弹 autoHide 边：SetOccluded(false) 仅当 m_occlusionHidWindow 为真才
+        // Show(true)；autoHide 自身隐藏态该标志恒 false，故只清标记、不弹窗，看门狗照常
+        // 探测感应区把它唤出。解除显示桌面(desktop=false)时不在此清，留交 RecomputeOcclusion 重算。
+        if (desktop) e->SetOccluded(false);
+        // autoHide 隐藏态：显示桌面时仍【不主动弹窗】（不 ShowWindow，hover 才 reveal），
+        // 但同样抬到桌面之上 —— 否则 reveal 弹出的窗口会落在 WorkerW 之下、看不到也点不到。
+        // 下方 ShowWindow 对 autoHide 隐藏态是 no-op（IsIconic 恒 false），不会误弹。
+        if (IsIconic(h)) ShowWindow(h, SW_SHOWNOACTIVATE);
+        ApplyEffectiveZOrder(e, desktop);
+    }
 }
 
 void DockManager::InstallOcclusionHook() {
@@ -643,9 +763,11 @@ void DockManager::UninstallOcclusionHook() {
     if (m_trayHwnd) {
         if (m_occlusionDebounceTimer) KillTimer(m_trayHwnd, TID_OCCLUSION_DEBOUNCE);
         if (m_occlusionFallbackTimer) KillTimer(m_trayHwnd, TID_OCCLUSION_FALLBACK);
+        if (m_minimizeWatchdogTimer)  KillTimer(m_trayHwnd, TID_MINIMIZE_WATCHDOG);
     }
     m_occlusionDebounceTimer = 0;
     m_occlusionFallbackTimer = 0;
+    m_minimizeWatchdogTimer = 0;
     // 只清自己那份所有权：无头用例会在同进程内构造多个 DockManager，
     // 不加这个判断会把别人的实例指针抹掉。
     if (g_occlusionOwner == this) g_occlusionOwner = nullptr;
@@ -721,6 +843,12 @@ LRESULT DockManager::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         return 0;
     }
+    // 显示桌面(WorkerW/Progman 置前)检测：把 dock 抬到桌面之上，避免被盖住而失效。
+    // 由 WinEventProc / 1s 看门狗在状态翻转时投递，此处落到消息循环安全执行 Z 序变更。
+    if (msg == WM_APP_SHOWDESKTOP) {
+        ApplyShowDesktopState(wParam != 0);
+        return 0;
+    }
     // 需求 6：去抖落盘定时器到点
     if (msg == WM_TIMER && wParam == TID_CFG_DEBOUNCE) {
         KillTimer(hwnd, TID_CFG_DEBOUNCE);
@@ -742,6 +870,22 @@ LRESULT DockManager::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     // 会在全部解除后自行 KillTimer，故这里【不】主动关，只做重算。
     if (msg == WM_TIMER && wParam == TID_OCCLUSION_FALLBACK) {
         RecomputeOcclusion();
+        return 0;
+    }
+    // 显示桌面 / Win+D / Win+M 兜底看门狗（多层防御第三层）：轮询四边是否被 OS 最小化，
+    // 是则恢复。仅业务态仍要求可见（IsWindowVisibleForTest）才恢复，autoHide 隐藏态不误唤出。
+    if (msg == WM_TIMER && wParam == TID_MINIMIZE_WATCHDOG) {
+        for (int i = 0; i < 4; ++i) {
+            DockEngine* e = m_docks[i].get();
+            if (!e) continue;
+            HWND h = e->GetHwnd();
+            if (h && IsIconic(h) && e->IsWindowVisibleForTest())
+                e->RestoreFromOsMinimize();
+        }
+        // 第三层兜底：显示桌面(WorkerW/Progman 置前)不仅可能最小化 dock，更常见的是用
+        // 桌面窗口「盖住」dock（dock 从不进入最小化态、IsIconic 恒 false）。兼做前台桌面
+        // 检测，漏网时 1s 内也能把 dock 抬到桌面之上；仅状态翻转才真正改 Z 序。
+        OnForegroundWindowChanged(GetForegroundWindow());
         return 0;
     }
     // P2-9 多显示器：显示器增删 / 分辨率 / 缩放变化后，各边 footprint 所在的

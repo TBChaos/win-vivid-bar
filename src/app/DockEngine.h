@@ -43,6 +43,15 @@ public:
     HRESULT Hide();
     void Shutdown();
 
+    // ═══ 显示桌面 / Win+D / Win+M / 外部工具最小化 的兜底恢复 ═══
+    // 当本窗口被 OS/外部最小化、但业务态仍要求可见（m_window->IsVisible()==true）时，
+    // 不抢焦点恢复并重新施加 Z 序（SW_SHOWNOACTIVATE / SWP_NOACTIVATE）。
+    // 四边由 DockManager 看门狗统一驱动；单实例也可由 WndProc 的 WM_SYSCOMMAND/WM_SIZE 触发。
+    // autoHide 隐藏态（IsVisible()==false）绝不误唤出 —— 区分「被 OS 最小化」与「业务隐藏」。
+    void RestoreFromOsMinimize();
+    // = 业务要求可见 且 窗口实际被 OS 最小化（诊断/无头验证用）
+    bool IsOsMinimized() const;
+
     // ═══ 消息处理（Windowed）═══
     static LRESULT CALLBACK StaticWndProc(HWND, UINT, WPARAM, LPARAM);
     LRESULT WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -62,13 +71,7 @@ public:
     // Bugfix 回归辅助：所有图标 scale 目标的最小值。1.0=正常大小；
     // 趋近 0 = 被 ApplyExitTargets 缩到最小（即用户报障的「过度缩小」）。
     float GetMinIconScaleTarget() const;
-    const char* GetStateName() const; // 调试/验收：当前状态机状态名
-
-    // ═══ 性能验收（Step 11：无头性能基线）═══
-    // 累计弹簧积分 / 布局计算耗时（微秒）与计帧数；Reset 后可在 1000 帧模拟前后读取差值
-    void ResetPerfAccum();
-    void GetPerfAccum(double& springUs, double& layoutUs, long long& frames) const;
-    double GetPerfRenderUs() const;   // 委托 RenderManager 的提交耗时累计
+    const char* GetStateName() const; // 当前状态机状态名
 
     // ═══ 启动目标（Step 1：点击启动应用）═══
     std::wstring GetResolvedLaunchTarget(int index) const;  // 解析后的启动路径
@@ -132,8 +135,6 @@ public:
     void MoveExternalDropPreview(POINT pt);
     void EndExternalDropPreview(bool commit);   // commit=true 占位转正并落盘；false 撤销
     bool ExternalDragPreviewActive() const { return m_externalDragActive; }
-    // 调试日志（真机 GUI 缺陷取证用，落盘到 <exedir>/debug_output/openDock.log）
-    void DebugLog(const wchar_t* fmt, ...);
 
     // ═══ 开机自启动 + 位置微调 + 图层 Z 序（Step 10）═══
     void ApplyPlacement();               // 依配置(position/offset/monitor/zOrder)定位窗口
@@ -366,12 +367,8 @@ private:
     std::shared_ptr<std::vector<IconEntry>> m_sharedSharedIcons;                // 共享默认图标集（共享）
 
     // 性能验收累计器（微秒 / 帧数）
-    double m_perfSpringUs = 0.0;
-    double m_perfLayoutUs = 0.0;
-    long long m_perfFrames = 0;
     bool m_comInitialized = false;   // 本层是否负责 CoInitializeEx（Shutdown 时对应 CoUninitialize）
     std::wstring m_exeDir;           // exe 所在目录（带结尾反斜杠），用于解析相对资源路径
-    bool        m_dbg = false;       // 调试日志开关（OPEN_DOCK_DEBUG 环境变量置位，诊断拖放预览用）
 
     // 系统托盘
     NOTIFYICONDATAW m_nid = {};

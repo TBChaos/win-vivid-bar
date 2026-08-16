@@ -304,8 +304,7 @@ void DockStateMachine::TickIdle(float dt) {
                 m_owner->IsEdgeEnabled(m_owner->m_appConfig.dock.position)
                 && (inOwnReveal || inDock);
             if (inOwnZone && !inCorner) {
-                // 与旧 inDock→HandleMouseMove 路径保持一致：隐藏态也记录光标位置，
-                // 使 Show() 后的首帧鱼眼主轴坐标不是上一次的陈旧值。
+                // 隐藏态也记录光标位置，使 Show() 后的首帧鱼眼主轴坐标不是上一次的陈旧值。
                 m_owner->m_lastMousePos = pt;
                 if (m_owner->m_showDelayMs <= 0) {
                     m_owner->Show();

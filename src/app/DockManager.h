@@ -65,6 +65,15 @@ private:
                                       LONG idObject, LONG idChild,
                                       DWORD idEventThread, DWORD dwmsEventTime);
 
+    // 显示桌面(WorkerW/Progman 置前)检测与恢复：被桌面窗口「盖住」的 dock 抬到桌面之上，
+    // 避免其从不进入最小化态(IsIconic 恒 false)而无法靠遮挡/最小化逻辑恢复。
+    void OnForegroundWindowChanged(HWND fg);
+    void ApplyShowDesktopState(bool desktop);
+    // 应用【有效 Z 序】：显示桌面激活时把 dock 抬到桌面窗口(WorkerW/Progman)之上，
+    // 但保留其配置的相对图层（topmost 配置维持 HWND_TOPMOST；bottom/normal 仅置于桌面窗口之上，
+    // 仍位于所有普通应用之下，等效「总在后面」）；非激活时按配置 m_zOrder 正常落位。
+    void ApplyEffectiveZOrder(DockEngine* e, bool desktop);
+
     HRESULT CreateEdgeEngine(DockPosition edge);   // 创建并初始化某边引擎
     void    DestroyEdgeEngine(DockPosition edge);  // 销毁某边引擎
 
@@ -110,6 +119,7 @@ private:
     bool m_trayHostClass = false;
 
     static constexpr UINT WM_APP_TRAY       = WM_APP + 2;
+    static constexpr UINT WM_APP_SHOWDESKTOP = WM_APP + 11;  // 显示桌面(WorkerW/Progman 置前)检测
     static constexpr UINT ID_TRAY_EXIT      = 1001;
     static constexpr UINT ID_TRAY_EDGE_TOP    = 1201;
     static constexpr UINT ID_TRAY_EDGE_BOTTOM = 1202;
@@ -127,8 +137,9 @@ private:
     // 与「遮挡态 CPU 归零」的目标背道而驰。区间见 InstallOcclusionHook。
     static constexpr int OCCLUSION_HOOK_COUNT = 5;
     HWINEVENTHOOK m_winEventHooks[OCCLUSION_HOOK_COUNT] = {};
-    UINT_PTR m_occlusionDebounceTimer = 0;   // 事件去抖（一次性，到点即 Kill）
+    UINT_PTR m_occlusionDebounceTimer = 0;   // 事件去抖（一次性，到点即毁）
     UINT_PTR m_occlusionFallbackTimer = 0;   // 兜底重检（仅遮挡期运行，全解除即 Kill）
+    UINT_PTR m_minimizeWatchdogTimer = 0;    // 显示桌面等多层防御第三层：低频 IsIconic 兜底恢复
     static constexpr UINT_PTR TID_OCCLUSION_DEBOUNCE = 2;
     static constexpr UINT_PTR TID_OCCLUSION_FALLBACK = 3;
     // 去抖 120ms：低于人眼对「拖窗停手→dock 响应」的感知阈值，又足以把
@@ -137,4 +148,18 @@ private:
     // 兜底 1200ms：只做布尔重检、不 PostMessage 驱动动画，且【仅遮挡期】运行。
     // 代价是最坏情况遮挡解除后 ~1.2s 才恢复看门狗（正常路径由事件钩子秒回）。
     static constexpr UINT OCCLUSION_FALLBACK_MS = 1200;
+
+    // ═══ 显示桌面 / Win+D / Win+M 兜底看门狗（第三层防御，消息拦截漏网时的最后防线）═══
+    // 1s 低频轮询四边 IsIconic：dock 是 WS_EX_TOOLWINDOW 无任务栏按钮，被 OS 最小化后
+    // 无法手工恢复，故需自恢复。仅当业务态仍要求可见（IsWindowVisibleForTest）才恢复，
+    // autoHide 隐藏态不误唤出。代价是空闲期线程每 1s 被唤醒一次（相较遮挡优化前的 40 次/秒
+    // 可忽略），换来「任意最小化路径都可在 ~1s 内复活」。
+    static constexpr UINT_PTR TID_MINIMIZE_WATCHDOG = 4;
+    static constexpr UINT     MINIMIZE_WATCHDOG_MS  = 1000;
+
+    // 显示桌面状态：前台窗口为桌面背板(WorkerW/Progman)时为 true。
+    // dock 是 WS_EX_TOOLWINDOW 无任务栏按钮，显示桌面会把桌面窗口置前并盖住 dock；
+    // dock 从不进入最小化态，故靠前台类检测，检测到即抬升 dock 到桌面之上。
+    bool m_showDesktopActive = false;
+    HWND m_desktopHwnd = nullptr;   // 当前置前的桌面窗口(WorkerW/Progman)，用于精准插入其上方
 };

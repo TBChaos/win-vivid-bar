@@ -35,10 +35,6 @@ public:
     void Shutdown();
     ~RenderManager();   // 防御性释放设备级 COM 资源
 
-    // ═══ 性能验收（Step 11）═══
-    void  ResetPerfRenderUs();        // 清零提交耗时累计
-    double GetPerfRenderUs() const { return m_perfRenderUs; }
-
     // 图标纹理管理（WIC 解码 → D2D Bitmap）
     // 生产路径：IconImage（优先内存 PNG 字节，不落盘）
     HRESULT LoadIconTextures(const std::vector<IconProvider::IconImage>& imgs);
@@ -206,7 +202,6 @@ private:
     std::vector<IconLayout>      m_lastLayouts;       // 最近一次布局
 
     // ═══ 状态 ═══
-    double m_perfRenderUs = 0.0;     // 累计提交耗时（微秒，性能验收）
     float m_backgroundOpacity = 1.0f;
     float m_bgOpacity   = 0.5f;    // 背景条不透明度（来自 config.backgroundOpacity）
     float m_cornerRadius = 16.0f;  // 背景条圆角半径（来自 config.cornerRadius）

@@ -939,10 +939,6 @@ void RenderManager::UpdateTooltip(int hoveredIndex, const std::vector<IconLayout
 }
 
 void RenderManager::CommitFrame() {
-    LARGE_INTEGER pfFreq, pfA, pfB;
-    QueryPerformanceFrequency(&pfFreq);
-    QueryPerformanceCounter(&pfA);
-
     if (m_renderMode == RenderMode::GDI_Fallback) {
         DrawGdiFrame();          // 软件全量重绘 DIB
         CommitGdiFrame();        // Windowed：UpdateLayeredWindow 呈现
@@ -951,13 +947,6 @@ void RenderManager::CommitFrame() {
     } else {
         DrawHeadlessFrame();
     }
-
-    QueryPerformanceCounter(&pfB);
-    m_perfRenderUs += (double)(pfB.QuadPart - pfA.QuadPart) * 1e6 / (double)pfFreq.QuadPart;
-}
-
-void RenderManager::ResetPerfRenderUs() {
-    m_perfRenderUs = 0.0;
 }
 
 // ═══════════════════════════════════════════════════════════
