@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(openDock LANGUAGES CXX)
+project(openDock LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,17 +9,30 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # 项目混合使用 _s 安全函数与原生 fopen，统一用此宏关闭唠叨，不改变行为。
 add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 
-# ═══ 调试模式开关（沙盒文本化验证用）═══
-# ON  → 控制台子系统（stdout 可见）+ DOCK_DEBUG_MODE 宏
-# OFF → Windows 子系统（无控制台，发布形态）
-option(DOCK_DEBUG_MODE "Enable debug output and console subsystem" ON)
-
 # ═══ 源文件收集 ═══
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 file(GLOB_RECURSE HEADERS "src/*.h")
 
 # ═══ 主目标 ═══
-add_executable(openDock ${SOURCES} ${HEADERS})
+# 应用图标资源（MAINICON）与托盘图标保持一致，编入 exe 使文件资源管理器 /
+# 任务栏 / 任务管理器显示同一图标。改图标后用 tools/gen_app_icon.py 重生成 res/icons/tray_icon.ico。
+# 注意：CMake 默认对 .rc 走 cmcldeps 依赖扫描，在部分环境下 cmcldeps.exe 无法启动
+# （CreateProcess: %1 is not a valid Win32 application）。这里改为直接用 rc.exe 预编译为 .res，
+# 再作为链接输入编入 exe，规避 cmcldeps。
+set(APP_RC "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
+set(APP_RES "${CMAKE_CURRENT_BINARY_DIR}/app.res")
+add_custom_command(
+    OUTPUT "${APP_RES}"
+    COMMAND "${CMAKE_RC_COMPILER}" /nologo /fo "${APP_RES}" "${APP_RC}"
+    DEPENDS "${APP_RC}"
+    COMMENT "Compiling app.rc -> app.res (app icon)"
+    VERBATIM)
+add_executable(openDock ${SOURCES} ${HEADERS} ${APP_RES})
+# 关键修复（2026-08-21）：add_executable 里的 app.res 在 Ninja 下仅被当作
+# 「顺序依赖」(order-only)，不会落到 link.exe 命令行，导致 exe 不嵌入任何图标，
+# 文件/任务栏图标与托盘图标全部丢失（二者都回退为系统默认图标）。
+# 用 target_link_options 把已编译的 .res 显式塞进链接命令行，确保 RT_GROUP_ICON 真正编入 exe。
+target_link_options(openDock PRIVATE "${APP_RES}")
 target_include_directories(openDock PRIVATE src)
 
 # ═══ 链接系统库 ═══
@@ -31,20 +44,16 @@ target_link_libraries(openDock PRIVATE
 # ═══ 编译选项 ═══
 target_compile_options(openDock PRIVATE /utf-8 /W4 /EHsc)
 
-if(DOCK_DEBUG_MODE)
-    target_compile_definitions(openDock PRIVATE DOCK_DEBUG_MODE=1)
-    set_target_properties(openDock PROPERTIES WIN32_EXECUTABLE FALSE)
-    message(STATUS "openDock: DEBUG MODE (console subsystem)")
-else()
-    set_target_properties(openDock PROPERTIES WIN32_EXECUTABLE TRUE)
-    target_compile_options(openDock PRIVATE /O2 /GL)
-    target_link_options(openDock PRIVATE /LTCG)
-    message(STATUS "openDock: RELEASE MODE (windows subsystem)")
-endif()
+# 仅保留发布形态：Windows 子系统（无控制台）+ 优化。
+# 诊断日志与无头仿真驱动已整体移除，不再提供 debug 构建链路。
+set_target_properties(openDock PROPERTIES WIN32_EXECUTABLE TRUE)
+target_compile_options(openDock PRIVATE /O2 /GL)
+target_link_options(openDock PRIVATE /LTCG)
+message(STATUS "openDock: RELEASE MODE (windows subsystem)")
 
 # ═══ 构建戳（消解「陈旧二进制」歧义）═══
 # 编译期注入 OPENDOCK_BUILD_TIME（构建时间）与 OPENDOCK_BUILD_HASH（git HEAD 短哈希，取不到为 unknown）。
-# DiagLog 会在每条诊断日志的首行打印 [BUILD] date=... hash=...，便于真机复测时核对二进制版本。
+# 构建戳便于真机复测时核对二进制版本（诊断日志已移除，不再依赖日志首行打印）。
 string(TIMESTAMP OPENDOCK_BUILD_TIME "%Y-%m-%d %H:%M:%S")
 execute_process(
     COMMAND git rev-parse --short HEAD

@@ -1,0 +1,6 @@
+// app.rc - application icon, kept consistent with the tray icon.
+// Embedded into openDock.exe as RT_GROUP_ICON with id MAINICON (== 1),
+// so File Explorer / taskbar / Task Manager show the same glyph as the tray.
+// Source artwork: res/icons/tray_icon.png (2048x2048 RGBA).
+// Regenerate the .ico with: python tools/gen_app_icon.py
+MAINICON ICON "res/icons/tray_icon.ico"

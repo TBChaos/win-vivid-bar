@@ -45,5 +45,31 @@
     { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
     { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
     { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
-  ]
+  ],
+  "edges": {
+    "bottom": [
+      { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+      { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+      { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+      { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+    ],
+    "top": [
+      { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+      { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+      { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+      { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+    ],
+    "left": [
+      { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+      { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+      { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+      { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+    ],
+    "right": [
+      { "path": "C:\\Windows\\System32\\notepad.exe", "name": "记事本", "index": 0 },
+      { "path": "C:\\Windows\\System32\\cmd.exe", "name": "命令提示符", "index": 0 },
+      { "path": "C:\\Windows\\explorer.exe", "name": "文件资源管理器", "index": 0 },
+      { "path": "C:\\Windows\\System32\\calc.exe", "name": "计算器", "index": 0 }
+    ]
+  }
 }

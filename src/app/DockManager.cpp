@@ -2,7 +2,7 @@
 // 多 Dock 编排器（#4 升级：四边同时显示）
 #include "DockManager.h"
 #include "DockEngine.h"      // 单条边 Dock 单元（已验证的悬停/放大/自动隐藏/拖放/菜单）
-#include "IconProvider.h"    // 托盘图标：运行时从 PNG 解码（LoadTrayIcon）
+#include "IconProvider.h"    // 图标提取/解码（托盘图标改由 AddTrayIcon 从 exe 内嵌 MAINICON 加载）
 #include "../utils/PathUtil.h"
 #include "../platform/AutoStart.h"
 #include <windows.h>
@@ -800,10 +800,15 @@ void DockManager::AddTrayIcon() {
     m_nid.uID    = 1;
     m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     m_nid.uCallbackMessage = WM_APP_TRAY;
-    // 托盘图标：运行时从 res/icons/tray_icon.png（去背景透明版）解码，按系统小图标尺寸缩放；
-    // 加载失败回退到系统默认图标。自定义句柄在 RemoveTrayIcon 中释放，避免 GDI 句柄泄漏。
-    std::wstring trayPng = PathUtil::GetExeDir() + L"res/icons/tray_icon.png";
-    HICON hTray = IconProvider::LoadTrayIcon(trayPng, GetSystemMetrics(SM_CXSMICON));
+    // 托盘图标：直接取 exe 内嵌资源 MAINICON（与文件/任务栏图标同一资源），
+    // 保证托盘图标与应用程序图标 100% 一致，且不再依赖 exe 同目录的松散 tray_icon.png。
+    // 资源名写法因 rc 工具链而异：先按字符串 "MAINICON"，失败再按整数 id 1 回退。
+    // 加载失败回退系统默认图标。自定义句柄在 RemoveTrayIcon 中释放，避免 GDI 句柄泄漏。
+    HINSTANCE hinst = GetModuleHandleW(nullptr);
+    int cx = GetSystemMetrics(SM_CXSMICON);
+    int cy = GetSystemMetrics(SM_CYSMICON);
+    HICON hTray = (HICON)LoadImageW(hinst, L"MAINICON", IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR);
+    if (!hTray) hTray = (HICON)LoadImageW(hinst, MAKEINTRESOURCEW(1), IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR);
     m_nid.hIcon = hTray ? hTray : LoadIconW(nullptr, (LPCWSTR)IDI_APPLICATION);
     m_trayIconOwned = (hTray != nullptr);
     wcscpy_s(m_nid.szTip, L"openDock");

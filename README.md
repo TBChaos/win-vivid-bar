@@ -19,11 +19,11 @@ openDock 在屏幕的四条边上提供可同时存在的悬浮启动栏：图�
 | **拖入添加 / 拖出删除** | OLE 拖放（STA 公寓 + `IDropTarget`）从资源管理器拖入文件或文件夹即添加；拖动图标离开本边感应区即删除 |
 | **图标自动提取** | 从 EXE/DLL 提取图标并在内存中编码为 PNG（不落盘）；缺失文件回退系统默认文件类型图标，绝不产生灰色占位 |
 | **配置持久化** | 去抖落盘（800ms）+ 临时文件原子替换，杜绝写入中断导致的配置损坏 |
-| **开机自启动** | 写入 `HKCU\...\Run`，启动期按真值表对齐「注册表状态」与「配置意图」 |
+| **开机自启动** | 优先创建计划任务（logon 触发器，秒级拉起）——**首次须以管理员权限运行并勾选自启**，否则回退 `HKCU\...\Run`（有约 1 分钟错峰）；启动期按真值表对齐「实际状态」与「配置意图」 |
 | **毛玻璃与圆角** | Acrylic / Accent Blur / DwmBlurBehind 三级降级；Win11 下启用 DWM 圆角 |
 | **多显示器与 DPI** | Per-Monitor DPI Aware V2，响应 `WM_DPICHANGED` / `WM_DISPLAYCHANGE` 自动重定位 |
 | **GDI 降级** | DirectComposition 不可用时回退到 GDI + Layered Window 软件合成路径 |
-| **系统托盘** | 常驻托盘入口，提供「显示边 / 图层位置 / 开机自动启动 / 退出」 |
+| **系统托盘** | 常驻托盘入口（图标与 exe 应用图标同源，均取内嵌 `MAINICON`），提供「显示边 / 图层位置 / 开机自动启动 / 退出」 |
 
 ---
 
@@ -73,48 +73,37 @@ export WINDOWSSDKDIR='C:\Program Files (x86)\Windows Kits\10'
 
 ### 2. 构建
 
-工程提供**两种互不干扰的构建形态**，各自使用独立的构建目录，避免 `CMakeCache` 串味：
+工程只提供**单一构建形态**：Release 优化 + Windows GUI（无控制台）子系统。源码改动后**必须重新构建**才能生效（`release/openDock.exe` 是陈旧二进制，见下方说明）。
+
+#### 方式一：build.sh（推荐，跨 Shell）
+
+在 **Git Bash / MSYS2 / WSL** 中进入项目根目录执行：
 
 ```bash
-# 正式版（发布形态）：build/ + Release + DOCK_DEBUG_MODE=OFF + GUI 窗口子系统
-./build.sh
-
-# 调试版（无头验证用）：build_dbg/ + Debug + DOCK_DEBUG_MODE=ON + 控制台子系统
-./build.sh --debug
+./build.sh                # 全新 / 增量构建到 build/
+./build.sh --no-config    # 仅增量 build，跳过 configure
+./build.sh --clean        # 先删除构建目录再全新构建（pristine）
+./build.sh --help         # 查看内置帮助
 ```
 
-其它参数：
+构建产物：`build/openDock.exe`。
 
-```bash
-./build.sh --no-config            # 仅增量 build，跳过 configure
-./build.sh --debug --no-config    # 调试版增量 build
-./build.sh --clean                # 先删除构建目录再全新构建（pristine）
-./build.sh --help                 # 查看内置帮助
+> **图标核验**：构建后运行 `python tools/pe_icon_res.py build/openDock.exe` 可确认 exe 已内嵌应用图标（`RT_GROUP_ICON`），退出码 0=已嵌入 / 1=未嵌入。
+
+#### 方式二：build.bat（Windows cmd，无需 Bash）
+
+**双击 `build.bat`**，或在项目目录打开 cmd 运行 `build.bat`。除完成与 `build.sh` 等价的构建外，还会把可直接运行的完整分发包打包进 `release/`：
+
+- `openDock.exe` + `res/config.json` + `res/` 资源
+- MSVC CRT / UCRT 运行库 dll（保证无 VS 的干净机器也能运行）
+
+```text
+build.bat            # Release 构建并打包 release/
+build.bat --clean    # 先清 build/ 再全新构建
+build.bat --no-config
 ```
 
-构建产物：
-
-- 正式版 → `build/openDock.exe`
-- 调试版 → `build_dbg/openDock.exe`
-
-构建结束时脚本会从 `CMakeCache.txt` **回读实际生效的形态**并与期望值比对，不符则报错退出并提示执行 `--clean`。这条自检用于根治历史上「看着没问题、一重建就变形态」的隐性漂移。
-
-> **两种形态的差异**
->
-> | | 正式版（默认） | 调试版（`--debug`） |
-> |---|---|---|
-> | 构建目录 | `build/` | `build_dbg/` |
-> | `CMAKE_BUILD_TYPE` | `Release` | `Debug` |
-> | `DOCK_DEBUG_MODE` | `OFF` | `ON` |
-> | 子系统 | Windows（GUI，无控制台） | Console（stdout 可见） |
-> | 入口点 | `wWinMain` | `main` |
-> | 优化 | `/O2 /GL` + `/LTCG` | 无 |
-> | 调试期 stderr 打印 | 已清理移除（不再有控制台日志） | 已清理移除（不再有控制台日志） |
-> | 行为 | 正常交互运行 | 启动即执行无头集成验证套件后退出 |
->
-> `CMakeLists.txt` 中 `option(DOCK_DEBUG_MODE ... ON)` 的默认值是 `ON`，但 **`build.sh` 每次 configure 都显式传参**，因此实际形态永远由脚本参数决定，不依赖该默认值。
-
-> **Windows 原生入口（可选 / 遗留）**：仓库另保留 `build.bat` 作为不依赖 Bash 的 Windows cmd 构建入口，与 `build.sh` 等价，属兼容保留项。本文档统一以 `build.sh` 为权威构建方式，所有命令示例均基于 `build.sh`；如需用 `build.bat`，其参数（`--debug` / `--clean` / `--no-config`）与产物目录与 `build.sh` 完全一致。
+> **重要**：`release/openDock.exe` 不会随 `build.sh` 自动更新，必须经 `build.bat` 打包、或手动把 `build/openDock.exe` 复制覆盖。要验证最新源码改动，请以 `release/` 内的 exe（或 `build/openDock.exe`）为准，不要直接运行历史 `release/` 二进制。
 
 ### 3. 运行
 
@@ -125,83 +114,43 @@ cd build
 
 启动后 Dock 默认隐藏于屏幕边缘（`autoHide` 默认开启），将鼠标移向已启用的屏幕边缘即可唤出。**退出方式：右键点击系统托盘图标 → 「退出 openDock」。**
 
+> **⚠️ 开机快速启动的前提：以管理员权限运行过一次**
+>
+> openDock 通过「计划任务（logon 触发器）」实现开机**秒级**启动，但**标准用户没有创建计划任务的权限**（`schtasks` 会被拒绝访问）。因此：
+>
+> 1. **右键 `openDock.exe` → 「以管理员身份运行」**；
+> 2. 在托盘菜单勾选「开机自动启动」——此时计划任务创建成功；
+> 3. 之后每次开机登录都由 Task Scheduler 秒级触发，**无需**再以管理员运行。
+>
+> 若从未以管理员运行过，自启会**静默回退**到 `HKCU\...\Run`，而 Windows 对 Run 键启动项存在**约 1 分钟错峰延迟**（`StartupDelayInMSec` 在 Win11 上实测无效）——表现为「开机后约 1 分钟 Dock 才出现」。
+
 CMake 在 configure 阶段会把 `res/config.json` 复制到 `build/config.json` 与 `build/res/config.json`（兼容双击 exe 时的两种候选解析路径），并通过 `copy_dock_icons` 这一 POST_BUILD 目标在每次增量构建时同步 `res/icons/` —— 修改图标资源后无需清缓存即可生效。
+
+**应用图标与托盘图标同源**：`app.rc` 声明的 `MAINICON`（`res/icons/tray_icon.ico`，由 `tools/gen_app_icon.py` 从 `res/icons/tray_icon.png` 生成 256–16 多尺寸）在编译期嵌入 exe，作为文件资源管理器 / 任务栏 / Alt-Tab 的应用图标；托盘图标运行时从同一内嵌资源加载（先按字符串名 `MAINICON`，失败回退整数 ID 1）。两者 100% 同源，且单 exe 分发不再依赖随行的 `tray_icon.png`。
+
+可用命令行开关：
+
+| 开关 | 作用 |
+|------|------|
+| *(无)* | 正常交互模式：`DockManager` 为每条启用的边创建 Dock 并运行消息循环 |
+| `--force-gdi` | 强制走 GDI 回退渲染路径（排查渲染问题时用） |
+| `--autostart` | 标记「本次为开机拉起」（计划任务 / Run 键均以此参数拉起），延迟 2s 再建窗口以避开 explorer 未就绪 |
 
 ---
 
-## 运行与验证
+## 质量与验证说明
 
-### 命令行开关
-
-| 开关 | 作用 | 生效形态 |
-|------|------|----------|
-| *(无)* | 正常交互模式：`DockManager` 为每条启用的边创建 Dock 并运行消息循环 | 仅正式版 |
-| `--verify` | 全链路自测，输出 `PASS`/`FAIL` 文本证据，进程退出码 `0`=通过 / `1`=失败 | 两种形态（内容不同，见下） |
-| `--acceptance` | 性能验收：1000 帧无头基线 + §9 验收报告 | 两种形态 |
-| `--force-gdi` | 强制走 GDI 回退渲染路径（测试钩子） | 两种形态 |
-| `--autostart` | 标记「本次为开机拉起」，延迟 2s 再建窗口以避开 explorer 未就绪 | 由自启动注册表项自动附加，无需手动传 |
-
-### 无头集成验证（调试版）
-
-调试版 **无论是否传参，启动即执行完整的无头集成验证套件**，逐项打印 `[INTEGRATION]` 证据行后退出：
-
-```bash
-./build.sh --debug
-cd build_dbg
-./openDock.exe            # 完整集成套件
-./openDock.exe --verify   # 集成套件 + 性能验收报告
-echo $?                   # 0 = 全部通过
-```
-
-覆盖的验证项包括：初始化与窗口创建、帧模拟、毛玻璃/圆角、DPI 与显示器枚举、自动隐藏与穿透状态机、图标增删改与纹理计数一致性、GDI 回退全链路、自启动注册表往返、放大溢出留白、竖向布局与朝向感知命中、四边同显各自钉边、感应区方向覆盖、遮挡挂起与恢复、拖出删除、命中死区环回归、包络不变量（INV-ENVELOPE）等。
-
-### 窗口化验证（正式版）
-
-```bash
-cd build
-./openDock.exe --verify > verify.log 2>&1
-```
-
-正式版的 `--verify` 走真实 DirectComposition 窗口化链路，验证悬停放大、点击启动目标解析、毛玻璃模式、DPI、穿透切换、自动隐藏往返、持久化回读、多 Dock 编排等，最后打印 `[VERIFY] WINDOWED_PIPELINE=PASS|FAIL`。
-
-> **正式版是 Windows GUI 子系统，不会自动分配控制台**。直接双击或在终端裸跑看不到任何文本输出，**必须重定向到文件**才能取到证据。若只是想快速看结果，用调试版更方便。
-
-### 性能验收
-
-```bash
-./openDock.exe --acceptance
-```
-
-执行 1000 帧模拟（含 20 帧预热，每 50 帧切换悬停图标以保持动画活跃），产出两份文件：
-
-- `debug_output/perf_1000frames.json` —— 平均/最小/最大帧耗时、弹簧积分与布局计算的每帧微秒数、渲染提交耗时、动画活跃占比、估算单核 CPU 占用
-- `debug_output/acceptance_report.md` —— §9 验收清单（启动、弹簧收敛、状态机完整性、布局正确性、配置加载、错误容忍、内存安全）
-
-### 配置沙盒隔离
-
-`--verify` 与 `--acceptance` **绝不会写生产配置**。进程启动时会把 `res/config.json` 复制一份种子到 `%TEMP%\openDock_verify\config.json`，并断言解析结果确实落在沙盒路径上；隔离建立失败即硬失败退出，不会退回生产配置继续跑。
-
-### 诊断日志
-
-`DiagLog(tag, ...)` 是工程当前的唯一诊断日志机制：**始终写文件**，不受编译期宏影响，用于真实 GUI 环境的问题排查。落盘位置为 `debug_output/openDock_<tag>.log`（`tag` 约定：`engine` / `icon` / `render` / `config`）。
-
-> 调试期曾有的 stderr 打印（`DOCK_LOG` 系列宏）已在代码清理中整体移除，正式版与调试版的行为差异仅体现在「是否自动运行无头验证套件」（见 §6），运行期不再产生控制台日志噪声。
-
-每个 tag 的日志在进程内首次写入时截断旧内容，并把编译期注入的构建戳写在第一行：
-
-```
-[BUILD] date=2026-08-07 07:26:11 hash=a1b2c3d
-```
-
-`OPENDOCK_BUILD_TIME` 与 `OPENDOCK_BUILD_HASH`（`git rev-parse --short HEAD`，取不到为 `unknown`）由 CMake 注入，用于真机复测时一眼核对二进制版本，消解「陈旧二进制」歧义。
-
-> **当前仓库不随附单元测试。** `CMakeLists.txt` 中原有的 `test_*` 目标与测试夹具复制已移除，工程回归纯应用构建，因此**没有 ctest / `--target test` 可用**。质量证据统一由上述 `--verify` / `--acceptance` 的无头验证套件提供。
+- **无自动化测试 / 验证套件**：`CMakeLists.txt` 中原有的 `test_*` 目标与 `--verify` / `--acceptance` 无头验证套件均已移除，工程为纯应用构建。**没有 ctest / `--target test` 可用**。
+- 渲染、命中、动画等依赖真实窗口与鼠标手势的行为**无法在无头环境中验证**（无头环境永远 96 DPI、无真实指针手势，命中缝隙类缺陷必漏）。质量需在本机 GUI 中人工回归：启动后逐边唤出、拖入/拖出、托盘菜单、自启动等核心路径。
+- 二进制版本可通过构建戳核对：`OPENDOCK_BUILD_TIME` 与 `OPENDOCK_BUILD_HASH`（`git rev-parse --short HEAD`，取不到为 `unknown`）由 CMake 注入，用于真机复测时一眼确认二进制版本，消解「陈旧二进制」歧义。
+- 图标内嵌可用 `tools/pe_icon_res.py` 静态核验（无需启动 GUI）：`python tools/pe_icon_res.py <exe>`，退出码 0=已内嵌 `RT_GROUP_ICON` / 1=未内嵌。
+- 工程在**正常运行时不产生任何日志文件**；早期版本的 `DiagLog` 文件日志与 `DebugExporter` JSON 快照机制已彻底移除。
 
 ---
 
 ## 架构概览
 
-openDock 采用分层架构，依赖方向自上而下单向：**`app` 编排层 → `core` 纯逻辑层 + `render` 渲染层 + `platform` 系统封装层**；`utils` 提供横切工具，`debug` 仅用于导出诊断快照。其中 `core/` 是**纯数学与状态**，不触碰任何 Win32 API，可独立单测与无头运行。
+openDock 采用分层架构，依赖方向自上而下单向：**`app` 编排层 → `core` 纯逻辑层 + `render` 渲染层 + `platform` 系统封装层**；`utils` 提供横切工具。其中 `core/` 是**纯数学与状态**，不触碰任何 Win32 API，可独立运行。
 
 ```
                           ┌──────────────────────────────┐
@@ -223,26 +172,20 @@ openDock 采用分层架构，依赖方向自上而下单向：**`app` 编排层
 ┌──▼─────┐ ┌▼───────▼──┐  ┌─────────────────▼────────┐  ┌─────▼──────┐
 │ core/  │ │ render/   │  │      platform/           │  │  utils/    │
 │ 几何   │ │RenderManager│  │ WindowManager           │  │ConfigManager│
-│ 物理   │ │DirectComp  │  │ AutoStart (注册表)      │  │DiagLog     │
+│ 物理   │ │DirectComp  │  │ AutoStart (任务/注册表) │  │            │
 │ 状态机 │ │Direct2D    │  │ TrayIcon               │  │            │
 │零Win32 │ │D3D11 / WIC │  │ IconProvider           │  │            │
 │ 依赖   │ │GDI_Fallback│  │ MouseHook / EventHook  │  │            │
 └────────┘ └────────────┘  └────────────────────────┘  └────────────┘
-                                          │
-                                    ┌─────▼─────┐
-                                    │  debug/   │
-                                    │DebugExporter│
-                                    └───────────┘
 ```
 
 ### 各层职责
 
 - **`app/`**：编排层。`DockManager` 为每条启用边创建并持有 `DockEngine`，运行唯一消息循环、维护唯一托盘图标、做遮挡检测与统一持久化；`DockEngine` 是单边控制器，按 `DockPosition` 索引，内部 `friend` 协作三个子模块——状态机 `DockStateMachine`、图标集合 `IconSetManager`、交互 `DockInteraction`。
-- **`core/`**：纯逻辑层。`EdgeGeometry<Orient, RestAtFarEdge, InwardSign>` 以编译期模板表达四边几何，运行时唯一的位置分支在 `MakeGeometry(pos)`；另含 `DockState` 状态枚举、`SpringPhysics` 二阶弹簧积分、`DockConstants`。**无任何 Win32 依赖**，是无头验证可被直接驱动的前提。
-- **`render/`**：渲染层。`RenderManager` 封装三种渲染态——窗口化（DirectComposition Visual 树，零重绘合成）、无头（离屏画布 + 像素回读，供 `--verify`/`--acceptance` 断言）、GDI 回退（Layered Window 软件合成）；并负责 Tooltip 与阴影效果。底层组合 DirectComposition（D3D11/DXGI）、Direct2D、DirectWrite、WIC。
-- **`platform/`**：Win32 封装层。`WindowManager` 负责 `WS_POPUP` 分层透明窗口、毛玻璃三级降级、Win11 圆角、DPI/多显示器与 Z 序；`AutoStart` 管理开机自启动注册表；`TrayIcon` 托盘；`IconProvider` 从 EXE/DLL 提取图标；`MouseHook` / `EventHook` 做穿透命中与遮挡检测。
-- **`utils/`**：横切工具。`ConfigManager` 手写 JSON 解析与去抖原子落盘；`DiagLog` 始终写文件的诊断日志。
-- **`debug/`**：`DebugExporter` 把状态/弹簧/布局快照写成 `debug_output/<name>.json`，供排查与验收报告引用。
+- **`core/`**：纯逻辑层。`EdgeGeometry<Orient, RestAtFarEdge, InwardSign>` 以编译期模板表达四边几何，运行时唯一的位置分支在 `MakeGeometry(pos)`；另含 `DockState` 状态枚举、`SpringPhysics` 二阶弹簧积分、`DockConstants`。**无任何 Win32 依赖**。
+- **`render/`**：渲染层。`RenderManager` 封装两种渲染态——窗口化（DirectComposition Visual 树，零重绘合成）、GDI 回退（Layered Window 软件合成）；并负责 Tooltip 与阴影效果。底层组合 DirectComposition（D3D11/DXGI）、Direct2D、DirectWrite、WIC。
+- **`platform/`**：Win32 封装层。`WindowManager` 负责 `WS_POPUP` 分层透明窗口、毛玻璃三级降级、Win11 圆角、DPI/多显示器与 Z 序；`AutoStart` 管理开机自启动（计划任务优先，注册表回退）；`TrayIcon` 托盘；`IconProvider` 从 EXE/DLL 提取图标；`MouseHook` / `EventHook` 做穿透命中与遮挡检测。
+- **`utils/`**：横切工具。`ConfigManager` 手写 JSON 解析与去抖原子落盘。
 
 ---
 
@@ -250,13 +193,14 @@ openDock 采用分层架构，依赖方向自上而下单向：**`app` 编排层
 
 ```
 openDock/
-├── CMakeLists.txt            # 工程定义、编译开关(DOCK_DEBUG_MODE)、链接库、构建戳注入
-├── build.sh                  # 主推构建入口（--debug / --no-config / --clean / --help）
+├── CMakeLists.txt            # 工程定义、链接库、构建戳注入、app.res 强制链接
+├── app.rc                    # 应用图标资源（MAINICON，编译期嵌入 exe）
+├── build.sh                  # 主推构建入口（--no-config / --clean / --help）
 ├── build.bat                 # 可选 / 遗留的 Windows 原生（cmd）构建入口，与 build.sh 等价
 ├── msvc_env.sh               # 探测 VS + Windows SDK，导出 MSVC 编译环境（x64）
 ├── src/
 │   ├── Common.h              # 枚举(DockState/DockPosition)、常量、错误宏 DOCK_HR_CHECK
-│   ├── main.cpp              # 入口；DOCK_DEBUG_MODE 下 main() / 否则 wWinMain()
+│   ├── main.cpp              # 入口（wWinMain，GUI 子系统）
 │   ├── core/                 # 纯数学与状态，零 Win32 依赖
 │   │   ├── EdgeGeometry.h        # 四边几何（编译期模板）
 │   │   ├── DockState.h / .cpp    # 状态机
@@ -270,32 +214,32 @@ openDock/
 │   │   ├── ConfigManager.h / .cpp# 配置加载 / 去抖落盘
 │   │   └── …（其余编排源文件）
 │   ├── render/               # 渲染层
-│   │   ├── RenderManager.h / .cpp# 窗化 / 无头 / GDI 三态渲染
+│   │   ├── RenderManager.h / .cpp# 窗化 / GDI 两态渲染
 │   │   ├── DirectCompRenderer.*  # DirectComposition 合成
 │   │   ├── D2DRenderer.*        # Direct2D 绘制
 │   │   └── …（其余渲染源文件）
 │   ├── platform/             # Win32 封装层
 │   │   ├── WindowManager.*   # 窗口 / 毛玻璃 / 圆角 / DPI
-│   │   ├── AutoStart.*       # 开机自启动注册表
+│   │   ├── AutoStart.*       # 开机自启动（计划任务 + 注册表）
 │   │   ├── TrayIcon.*        # 系统托盘
 │   │   ├── IconProvider.*    # 图标提取
 │   │   ├── MouseHook.* / EventHook.*
 │   │   └── …（其余平台封装）
-│   ├── utils/                # 工具
-│   │   ├── DiagLog.h / .cpp  # 诊断日志
-│   │   └── …
-│   └── debug/                # 调试导出
-│       └── DebugExporter.h / .cpp
+│   └── utils/                # 工具
+│       └── …
 ├── res/
 │   ├── config.json          # 默认配置（见 §8）
-│   └── icons/               # 图标资源（增量构建时同步）
+│   └── icons/               # 图标资源（tray_icon.png 母版 + 嵌入用 tray_icon.ico）
+├── tools/
+│   ├── gen_app_icon.py      # 从 tray_icon.png 生成多尺寸 tray_icon.ico（256–16）
+│   ├── msvc_env.py          # 构建期 MSVC/SDK 环境推导（build.bat 用）
+│   └── pe_icon_res.py       # 校验 exe 是否内嵌图标（构建后核验，退出码 0/1）
 ├── docs/                     # 文档
-├── build/                    # 正式版构建产物（git-ignored）
-├── build_dbg/                # 调试版构建产物（git-ignored）
-└── debug_output/             # 诊断日志 / 验收报告（git-ignored）
+├── build/                    # 构建产物（git-ignored）
+└── release/                  # 分发目录（build.bat 打包生成）
 ```
 
-> `docs/`、`build/`、`build_dbg/`、`debug_output/` 均为非源码目录；`build*` 与 `debug_output/` 由 `.gitignore` 忽略。**构建入口说明**：`build.sh` 是主推的跨 Shell（Git Bash / MSYS2 / WSL）构建脚本，仅依赖 VS + Ninja；`build.bat` 是**可选的、遗留保留**的 Windows 原生（cmd）构建入口，标志面与产物与 `build.sh` 一致（`build/` + `build_dbg/`、显式 `DOCK_DEBUG_MODE`、构建末尾回读 `CMakeCache.txt` 自检），但额外依赖 **Python 3 + `tools/msvc_env.py`** 推导工具链，且 RELEASE 时会把 `release/` 打包为「可直接分发」目录（`openDock.exe` + `config.json` + `res\` + MSVC CRT/UCRT dlls）。**新用户与 CI 一律优先使用 `build.sh`**；`release/` 由 `build.bat` 的打包步骤生成，不在 `build.sh` 主构建链路内。
+> `docs/`、`build/`、`release/` 均为非源码目录；`build*` 由 `.gitignore` 忽略。**构建入口说明**：`build.sh` 是主推的跨 Shell（Git Bash / MSYS2 / WSL）构建脚本，仅依赖 VS + Ninja；`build.bat` 是**可选的、遗留保留**的 Windows 原生（cmd）构建入口，标志面与产物与 `build.sh` 一致（`build/`），但额外依赖 **Python 3 + `tools/msvc_env.py`** 推导工具链，且 RELEASE 时会把 `release/` 打包为「可直接分发」目录（`openDock.exe` + `config.json` + `res\` + MSVC CRT/UCRT dlls）。**新用户与 CI 一律优先使用 `build.sh`**；`release/` 由 `build.bat` 的打包步骤生成，不在 `build.sh` 主构建链路内。
 
 ---
 
@@ -305,7 +249,6 @@ openDock/
 
 - **默认 / 源码侧**：`res/config.json`。
 - **运行侧**：CMake 在 configure 阶段将其复制到 `build/config.json` 与 `build/res/config.json`（兼容双击 exe 时两种候选解析路径），以 **先命中者** 生效。
-- **沙盒侧**：`--verify` / `--acceptance` 启动时会把 `res/config.json` 种子复制到 `%TEMP%\openDock_verify\config.json`，验证过程**只读写该沙盒路径**，绝不动生产配置。
 
 配置为手写解析的 JSON（无第三方依赖），落盘采用「写临时文件 + 原子替换」，并去抖 800ms 合并多次改动，避免写入中断导致的损坏。
 
@@ -329,7 +272,7 @@ openDock/
 | `display.monitor` | int | `0` | 目标显示器索引（0 = 主显示器） |
 | `autoHide.autoHide` | bool | `true` | 是否边缘自动隐藏 |
 | `autoHide.showDelay` / `autoHide.hideDelay` | int | `0` / `0` | 显示 / 隐藏延迟（ms） |
-| `autoStart` | bool | `false` | 是否开机自启动 |
+| `autoStart` | bool | `false` | 是否开机自启动（计划任务优先；标准用户创建任务失败时回退 HKCU\Run，存在启动错峰，见已知限制 §8） |
 | `edgeOffset` / `centerOffset` | int | `0` / `0` | 距边 / 距中心偏移（px） |
 | `zOrder` | string | `"bottom"` | 层级：`"top"`(1) / `"normal"`(0) / `"bottom"`(-1) |
 | `edgeEnabled` | bool[4] | `[true,true,true,true]` | 四边启用开关，顺序 `[下,上,左,右]` |
@@ -353,16 +296,17 @@ openDock/
 2. **无内置图标库 / Docklet 插件体系**：图标来自拖入或 `config.json` 显式配置，工程未实现「内置图标库」「Docklet 插件」等可扩展位。
 3. **未做国际化（i18n）**：托盘菜单与提示均为中文，未抽象多语言资源；非中文环境 UI 文本不变。
 4. **Dock 右键上下文菜单已移除**：在 Dock 条上右键不再弹出配置菜单（已被刻意移除）；删除图标通过「拖动图标离开本边感应区」完成。退出等全局操作统一走**系统托盘右键菜单**。这是设计意图，不是遗漏。
-5. **无 ctest 单元测试**：如 §6 所述，`CMakeLists.txt` 已移除 `test_*` 目标，回归纯应用构建；质量证据依赖 `--verify` / `--acceptance` 无头套件。
+5. **无 ctest 单元测试，无自动化验证套件**：`CMakeLists.txt` 已移除 `test_*` 目标与 `--verify` / `--acceptance` 无头套件，回归纯应用构建；质量需在本机 GUI 中人工回归（见「质量与验证说明」）。
 6. **GDI 回退路径功能降级**：`--force-gdi` 或 DirectComposition 不可用时走 GDI + Layered Window，该路径下毛玻璃与 DWM 圆角不可用，仅保证基础显示与交互。
 7. **`release/` 分发目录由 `build.bat` 打包生成，不在主构建链路内**：`release/` 不是 `build.sh` 的产物；仅当用 `build.bat` 做 RELEASE 构建时，才会把 `openDock.exe` + `config.json` + `res\` + MSVC CRT/UCRT dlls 打包进 `release/`。升级请用 `build.sh`（或 `build.bat`）从源码重建，不要直接依赖历史 `release/` 二进制。
+8. **标准用户的自启限制**：非管理员账户创建计划任务会被系统拒绝访问，此时 `AutoStart` 回退到 `HKCU\...\Run`；Windows 对 Run 键启动项有约 1 分钟错峰延迟（`StartupDelayInMSec` 在 Win11 上实测无效）。若需开机秒级拉起，请以管理员身份运行一次 openDock 并勾选「开机自动启动」，让计划任务创建成功（任务建成后，之后标准用户登录仍由 Task Scheduler 秒级触发）。
 
 ---
 
 ## 许可证与贡献
 
-- **许可证**：本仓库采用 MIT 许可证，允许自由使用、修改、分发，包括闭源商业使用，仅需保留版权声明。
-- **联系方式**：如有问题或建议，请联系作者邮箱：953518998@qq.com
+- **许可证**：本仓库当前未随附 `LICENSE` 文件，授权条款尚未确定。在条款明确前，请暂勿基于源码进行再分发或闭源衍生。
 - **贡献约定**：
-  - 配置、渲染、平台封装的改动请在 PR 描述中附上对应的验证命令与输出证据。
+  - 新功能 / 修复需在本机 GUI 中人工回归：启动后逐边唤出、拖入/拖出、托盘菜单、自启动等核心路径无回归。
+  - 配置、渲染、平台封装的改动请在 PR 描述中附上本机回归步骤与观察结果。
   - 保持零第三方依赖原则：新增能力优先用 Windows SDK 系统库或手写实现。

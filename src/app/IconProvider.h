@@ -28,11 +28,6 @@ public:
     std::wstring GetDisplayName(size_t index) const;
     size_t Count() const { return m_images.size(); }
 
-    // 运行时从 PNG 文件解码并按 size 缩放生成托盘用 HICON（32bpp BGRA + alpha）。
-    // 复用项目既有 WIC 基础设施（无需 .ico/.rc 资源）。加载失败返回 nullptr，
-    // 调用方应回退系统默认图标并负责 DestroyIcon 返回的句柄。
-    static HICON LoadTrayIcon(const std::wstring& pngPath, int size);
-
 private:
     // 生成系统默认文件类型图标（按扩展名 / 文件夹），返回内存 PNG；
     // 永不产生灰色占位，保证总有真实/默认图标（需求2）。

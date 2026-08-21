@@ -373,7 +373,7 @@ private:
     // 系统托盘
     NOTIFYICONDATAW m_nid = {};
     bool m_trayAdded = false;
-    bool m_trayIconOwned = false;   // 自定义托盘图标句柄（LoadTrayIcon）需 DestroyIcon
+    bool m_trayIconOwned = false;   // 自定义托盘图标句柄（LoadImage 内嵌 MAINICON）需 DestroyIcon
 
     static constexpr float ENTRY_STAGGER_SEC = 0.03f;   // 入场级联延迟 30ms/图标
     static constexpr float BOUNCE_RESET_SEC  = 0.10f;   // 弹跳回落延迟

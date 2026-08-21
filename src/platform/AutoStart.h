@@ -1,9 +1,16 @@
 // src/platform/AutoStart.h
-// 开机自启（HKCU\Software\Microsoft\Windows\CurrentVersion\Run）平台设施。
-// 从 ConfigManager 搬出：注册表访问属于平台能力，不属于配置序列化的职责。
-// 关联：ADR_P3_design.md §3（ADR-3 开机自启）。
+// 开机自启平台设施。从 ConfigManager 搬出：注册表/计划任务访问属于平台能力，
+// 不属于配置序列化的职责。关联：ADR_P3_design.md §3（ADR-3 开机自启）。
 //
-// 键值规格（固定，勿随版本变化）：
+// 机制（2026-08 重构）：
+//   主路径 = 计划任务（logon 触发器，名称 "openDock"）。Task Scheduler 服务起得很早，
+//   在「用户登录瞬间」直接拉起本程序，不受 Explorer 对 Run 键启动项的错峰延迟
+//   （startup app staggering，实测约 1 分钟）影响 —— 根治开机自启慢。
+//   注意：计划任务的「创建」在标准用户 / 受限策略下会被「拒绝访问」，故不可作唯一路径。
+//   兜底路径 = HKCU\Run 键 + 写入 HKCU\...\Explorer\Serialize\StartupDelayInMSec=0
+//   关闭 Windows 对启动项的错峰延迟，把 Run 键路径也压回秒级（标准用户即可，无需管理员）。
+//
+// Run 键规格（兜底，固定，勿随版本变化）：
 //   根键   : HKEY_CURRENT_USER
 //   子键   : Software\Microsoft\Windows\CurrentVersion\Run（测试可注入，见 SetRunSubKeyForTest）
 //   值名   : openDock

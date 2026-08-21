@@ -115,7 +115,7 @@ private:
     HWND m_trayHwnd = nullptr;
     NOTIFYICONDATAW m_nid = {};
     bool m_trayAdded = false;
-    bool m_trayIconOwned = false;   // 自定义托盘图标句柄（LoadTrayIcon）需 DestroyIcon
+    bool m_trayIconOwned = false;   // 自定义托盘图标句柄（LoadImage 内嵌 MAINICON）需 DestroyIcon
     bool m_trayHostClass = false;
 
     static constexpr UINT WM_APP_TRAY       = WM_APP + 2;
