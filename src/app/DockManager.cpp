@@ -17,7 +17,10 @@
 
 // ───────────────────────── 构造 / 析构 ─────────────────────────
 DockManager::DockManager() = default;
-DockManager::~DockManager() { Shutdown(); }
+DockManager::~DockManager() {
+    if (m_autoStartThread.joinable()) m_autoStartThread.join();
+    Shutdown();
+}
 
 // ───────────────────────── 初始化 ─────────────────────────
 HRESULT DockManager::Initialize(const AppConfig& cfg) {
@@ -43,11 +46,14 @@ HRESULT DockManager::Initialize(const AppConfig& cfg) {
     {
         bool effective = m_cfg.autoStart;
         [[maybe_unused]] const bool wrote = AutoStart::Reconcile(m_cfg.autoStart, effective);
-        // 注意：不把 effective 回写进 m_cfg.autoStart。配置是【用户意图】，注册表只是
-        // 【生效状态】。唯一 effective != intent 的情形是 intent=true 而注册表不可用
-        //（组策略/安全软件），此时把意图改成 false 会让用户下次打开菜单发现勾自己没了，
-        // 更困惑；保留意图，等注册表恢复可写时下次启动自动生效。
+    // 注意：不把 effective 回写进 m_cfg.autoStart。配置是【用户意图】，注册表只是
+    // 【生效状态】。唯一 effective != intent 的情形是 intent=true 而注册表不可用
+    //（组策略/安全软件），此时把意图改成 false 会让用户下次打开菜单发现勾自己没了，
+    // 更困惑；保留意图，等注册表恢复可写时下次启动自动生效。
     }
+    // 后台异步查询真实自启状态（不阻塞 UI）；首查完成前菜单用用户意图兜底。
+    m_autoStartReady = false;
+    RefreshAutoStartState();
     m_initialized = true;
     return S_OK;
 }
@@ -928,6 +934,12 @@ LRESULT DockManager::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             const bool ok   = want ? AutoStart::Enable() : AutoStart::Disable();
             if (ok) {
                 m_cfg.autoStart = want;
+                // 乐观更新缓存（下次右键立即反映）；真实状态由下次启动后台查询纠正。
+                {
+                    std::lock_guard<std::mutex> lk(m_autoStartMutex);
+                    m_autoStartChecked = want;
+                    m_autoStartReady   = true;
+                }
                 FlushConfig(/*force=*/true);   // 立即落盘，别等去抖
             } else {
                 MessageBoxW(m_trayHwnd, L"无法修改开机自启：注册表写入被策略或安全软件阻止。",
@@ -943,6 +955,23 @@ LRESULT DockManager::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+void DockManager::RefreshAutoStartState() {
+    // 防御：理论上仅初始化期调用一次；若未来多次调用，先等上一次结束避免线程对象悬垂。
+    if (m_autoStartThread.joinable()) m_autoStartThread.join();
+    // 后台线程查询真实自启状态（AutoStart::Read 内部会同步调 schtasks，可能耗时），
+    // 结果写入缓存，UI 线程只读缓存，零阻塞。
+    m_autoStartThread = std::thread([this]() {
+        const AutoStart::Query q = AutoStart::Read();
+        const bool checked = (q.status == AutoStart::Status::EnabledCurrent ||
+                              q.status == AutoStart::Status::EnabledStale);
+        {
+            std::lock_guard<std::mutex> lk(m_autoStartMutex);
+            m_autoStartChecked = checked;
+            m_autoStartReady   = true;
+        }
+    });
 }
 
 void DockManager::ShowTrayMenu(int screenX, int screenY) {
@@ -973,10 +1002,16 @@ void DockManager::ShowTrayMenu(int screenX, int screenY) {
     // 需求 7：开机自动启动。勾选状态以【注册表实际状态】为准（用户看到的是"现在到底
     // 会不会自启"），而点击写入的意图落到 config —— intent/state 分离，见 ADR §3.3。
     {
-        const AutoStart::Query q = AutoStart::Read();
+        // 勾选状态以【缓存的实际自启状态】为准（后台线程已查询，见 RefreshAutoStartState），
+        // 不在 UI 线程同步调用 AutoStart::Read()（含 schtasks 查询），避免右键菜单卡顿。
+        // 后台尚未就绪时退用用户意图兜底显示。
+        bool checked;
+        {
+            std::lock_guard<std::mutex> lk(m_autoStartMutex);
+            checked = m_autoStartReady ? m_autoStartChecked : m_cfg.autoStart;
+        }
         UINT flags = MF_STRING;
-        if (q.status == AutoStart::Status::EnabledCurrent) flags |= MF_CHECKED;
-        if (q.status == AutoStart::Status::Error)          flags |= MF_GRAYED;
+        if (checked) flags |= MF_CHECKED;
         AppendMenuW(hMenu, flags, ID_TRAY_AUTOSTART, L"开机自动启动");
     }
 

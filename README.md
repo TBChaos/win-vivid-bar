@@ -301,11 +301,11 @@ openDock/
 7. **`release/` 分发目录由 `build.bat` 打包生成，不在主构建链路内**：`release/` 不是 `build.sh` 的产物；仅当用 `build.bat` 做 RELEASE 构建时，才会把 `openDock.exe` + `config.json` + `res\` + MSVC CRT/UCRT dlls 打包进 `release/`。升级请用 `build.sh`（或 `build.bat`）从源码重建，不要直接依赖历史 `release/` 二进制。
 8. **标准用户的自启限制**：非管理员账户创建计划任务会被系统拒绝访问，此时 `AutoStart` 回退到 `HKCU\...\Run`；Windows 对 Run 键启动项有约 1 分钟错峰延迟（`StartupDelayInMSec` 在 Win11 上实测无效）。若需开机秒级拉起，请以管理员身份运行一次 openDock 并勾选「开机自动启动」，让计划任务创建成功（任务建成后，之后标准用户登录仍由 Task Scheduler 秒级触发）。
 
----
+
 
 ## 许可证与贡献
 
-- **许可证**：本仓库当前未随附 `LICENSE` 文件，授权条款尚未确定。在条款明确前，请暂勿基于源码进行再分发或闭源衍生。
+- **许可证**：本仓库以 **MIT License** 授权，详见根目录 `LICENSE` 文件。Copyright (c) 2026 TBChaos。在遵守许可证条款（保留版权声明与许可声明）的前提下，允许自由使用、复制、修改、合并、发布、分发、再许可及销售本软件及其副本。
 - **贡献约定**：
   - 新功能 / 修复需在本机 GUI 中人工回归：启动后逐边唤出、拖入/拖出、托盘菜单、自启动等核心路径无回归。
   - 配置、渲染、平台封装的改动请在 PR 描述中附上本机回归步骤与观察结果。

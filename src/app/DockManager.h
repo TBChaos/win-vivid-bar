@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <mutex>        // std::mutex（边所有权锁，P1-7 换边竞态串行化）
+#include <thread>       // std::thread（开机自启状态后台查询，避免 UI 线程阻塞）
 
 class DockEngine;
 
@@ -109,6 +110,11 @@ private:
     // m_sharedSharedIcons 非空而跳过 sharedIcons 更新，它永远停在加载初值。
     void RefreshIconsFromEngines();
 
+    // 开机自启状态：后台线程异步调用 AutoStart::Read()（含 schtasks 查询），
+    // 结果写入 m_autoStartChecked / m_autoStartReady，供 ShowTrayMenu 缓存驱动勾选，
+    // 避免 UI 线程同步查询导致右键菜单卡顿。仅初始化期调用一次。
+    void RefreshAutoStartState();
+
     bool m_cfgDirty = false;
 
     // 托盘宿主（隐藏窗口，仅用于接收 Shell_NotifyIcon 回调与菜单命令）
@@ -162,4 +168,11 @@ private:
     // dock 从不进入最小化态，故靠前台类检测，检测到即抬升 dock 到桌面之上。
     bool m_showDesktopActive = false;
     HWND m_desktopHwnd = nullptr;   // 当前置前的桌面窗口(WorkerW/Progman)，用于精准插入其上方
+
+    // 开机自启状态缓存：由后台线程（RefreshAutoStartState）异步查询，
+    // 避免 UI 线程同步调用 AutoStart::Read()（含 schtasks 查询）阻塞右键菜单。
+    bool       m_autoStartChecked = false;   // 真实自启状态（供菜单勾选）
+    bool       m_autoStartReady   = false;   // 后台首查是否完成
+    std::mutex m_autoStartMutex;             // 保护上述两成员（后台线程 ↔ UI 线程）
+    std::thread m_autoStartThread;          // 后台刷新线程（析构时 join）
 };

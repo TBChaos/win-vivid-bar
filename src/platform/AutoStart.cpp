@@ -162,7 +162,7 @@ bool RunSchtasks(const std::wstring& args, const std::wstring& outFile, DWORD& e
     CloseHandle(hOut);
     if (!ok) return false;
 
-    WaitForSingleObject(pi.hProcess, 15000);
+    WaitForSingleObject(pi.hProcess, 4000);   // 菜单在 UI 线程同步查询，过长会卡顿右键
     GetExitCodeProcess(pi.hProcess, &exitCode);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
@@ -390,7 +390,12 @@ AutoStart::Query AutoStart::Read() {
                      ? Status::EnabledCurrent : Status::EnabledStale;
             return q;
         }
-        // 任务存在但解析失败：保守按 Run 键兜底
+        // 任务存在但命令解析失败（管理员提升上下文下 schtasks 可能偶发异常）：
+        // 任务名称为本程序独占，存在即通过 logon 触发器自启，保守判为已启用，
+        // 不再回退 ReadRunKey——计划任务方式会清空 Run 键，回退会误判为未启用。
+        Query q;
+        q.status = Status::EnabledCurrent;
+        return q;
     }
     return ReadRunKey();
 }

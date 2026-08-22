@@ -21,8 +21,8 @@ CMAKE_AR:FILEPATH=D:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools
 // MinSizeRel ...
 CMAKE_BUILD_TYPE:STRING=Release
 
-//CXX compiler
-CMAKE_CXX_COMPILER:STRING=D:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
+//No help, variable specified on the command line.
+CMAKE_CXX_COMPILER:UNINITIALIZED=cl.exe
 
 //Flags used by the CXX compiler during all build types.
 CMAKE_CXX_FLAGS:STRING=/DWIN32 /D_WINDOWS /EHsc
